@@ -3,11 +3,16 @@
 
 export type Vars = Record<string, string>
 export type Entry = Record<string, string>
+export type QuestionPhase = 'logistics' | 'installation'
+export type ResponseType = 'yes-no' | 'text' | 'number' | 'choice'
 
 export interface Question {
   id: string
   title: string
   text: (v: Vars, e: Entry) => string
+  phase?: QuestionPhase
+  responseType?: ResponseType
+  options?: string[]
   bullets?: string[]
   why?: string
   photo?: 'required' | 'optional'
@@ -94,8 +99,8 @@ export const LINES: Line[] = [
       { key: 'neumatico', label: 'Sistema rotativo / rodillos neumáticos', options: ['Sí', 'No'] },
     ],
     derive: (e) => {
-      const [fases, volt] = e.voltaje.split(' ')
-      return { MEDIDAS: fiberDims(e.modelo), FASES: fases, VOLTAJE: volt, PASTILLA: pick(wattsPastilla, e.potencia, '3x50 A'), REGULADOR: pick(wattsReg, e.potencia, '20 kVA'), GAS: e.gas, LITROS: pick(wattsChiller, e.potencia, '25') }
+      const [fases = 'Trifásico', volt = '220V'] = (e.voltaje || 'Trifásico 220V').split(' ')
+      return { MEDIDAS: fiberDims(e.modelo ?? ''), FASES: fases, VOLTAJE: volt, PASTILLA: pick(wattsPastilla, e.potencia, '3x50 A'), REGULADOR: pick(wattsReg, e.potencia, '20 kVA'), GAS: e.gas ?? '—', LITROS: pick(wattsChiller, e.potencia, '25') }
     },
     questions: [
       { id: 'maniobra', title: 'Maniobra y descarga', text: (_v, e) => (/X0R6|X0R3|T6L/.test(e.modelo) ? 'Es obligatorio el uso de montacargas. ¿Ya tienes contratado o cuentas en sitio con un montacargas de al menos 5 toneladas con uñas largas?' : '¿Cuentas con un área despejada y a nivel de piso (sin escalones ni pendientes)?'), photo: 'optional', critical: true },

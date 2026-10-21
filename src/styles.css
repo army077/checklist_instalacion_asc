@@ -76,6 +76,18 @@
   .propose label { @apply grid gap-1 text-xs font-bold uppercase tracking-wider text-steel; }
   .propose input, .propose textarea { @apply border border-line px-3 py-2 text-sm font-normal normal-case; }
 
+  .phase-card { @apply my-4 border border-line border-l-4 border-l-brand bg-white p-4; }
+  .phase-heading { @apply flex flex-wrap items-center justify-between gap-2; }
+  .phase-heading h2 { @apply m-0 text-sm font-bold uppercase tracking-wide; }
+  .phase-actions, .header-actions, .role-switch { @apply flex flex-wrap gap-2; }
+  .phase-actions { @apply mt-3; }
+  .phase-card .notice { @apply mb-0; }
+  .demo-note { @apply mt-4 border border-dashed border-line bg-paper p-3 text-xs text-neutral-600; }
+  .full-width { @apply mt-3 w-full; }
+  .response-field { @apply my-3 grid gap-1 text-xs font-bold uppercase tracking-wider text-steel; }
+  .response-field input, .response-field select { @apply border border-line bg-white px-3 py-2 text-sm font-normal normal-case; }
+  .response-options { @apply grid-cols-1; }
+
   .done { @apply py-5 text-center; }
   .check { @apply mx-auto mb-3 grid size-16 place-items-center bg-ok text-3xl text-white; }
   .check.wait { @apply bg-warn; }
@@ -87,7 +99,19 @@
   .admin-head h1 { @apply m-0; }
   .table { @apply grid gap-2; }
   .row { @apply flex flex-wrap items-center gap-2 border border-line border-l-4 border-l-steel bg-white p-3; }
+  .row.needs-booking { @apply border-l-warn bg-amber-50; }
+  .row.proposed { @apply border-l-sky-600 bg-sky-50; }
+  .row.blocked { @apply border-l-brand bg-red-50; }
+  .row.complete { @apply border-l-ok bg-green-50; }
+  .row.incomplete { @apply border-l-neutral-400 bg-neutral-50; }
+  .row.in-progress { @apply border-l-steel bg-white; }
   .grow { @apply grid flex-[1_1_260px] gap-0.5; }
+  .phase-line { @apply leading-relaxed; }
+  .phase-line.needs-booking { @apply font-semibold text-amber-800; }
+  .phase-line.proposed { @apply font-semibold text-sky-800; }
+  .phase-line.confirmed { @apply font-semibold text-green-800; }
+  .phase-line.blocked { @apply font-semibold text-red-800; }
+  .phase-line.incomplete { @apply text-neutral-600; }
   .pill { @apply bg-neutral-400 px-2 py-1 font-mono text-[11px] font-bold uppercase tracking-wider text-white; }
   .pill.ready { @apply bg-ok; }
   .pill.issues { @apply bg-warn; }
@@ -97,4 +121,47 @@
   .ans.no b { @apply text-brand; }
   .ans.si b { @apply text-ok; }
   .ans img { @apply max-w-56 border border-line; }
+  .block { @apply mt-2 block; }
+  .config-grid { @apply my-4 grid gap-4 md:grid-cols-2; }
+  .regulator-editor .response-field { @apply max-w-md; }
+  .question-table-wrap { @apply overflow-x-auto; }
+  .question-table { @apply w-full min-w-[900px] border-collapse text-left text-sm; }
+  .question-table th { @apply border-b-2 border-line bg-paper p-2 text-xs uppercase tracking-wide; }
+  .question-table td { @apply border-b border-line p-2 align-top; }
+  .question-table input:not([type="checkbox"]), .question-table textarea, .question-table select { @apply w-full min-w-32 border border-line bg-white p-2 text-sm; }
+  .question-table td:last-child .btn { @apply px-3 py-2 text-xs; }
+
+  .conv-page { @apply max-w-6xl; }
+  .conv-layout { @apply grid h-[70vh] min-h-[480px] grid-cols-[320px_1fr] gap-0 border border-line bg-white; }
+  .conv-list-pane { @apply flex flex-col overflow-hidden border-r border-line; }
+  .conv-filters { @apply flex flex-col gap-2 border-b border-line p-3; }
+  .conv-search { @apply border border-line bg-paper px-3 py-2 text-sm; }
+  .conv-status-tabs { @apply flex flex-wrap gap-1; }
+  .conv-tab { @apply cursor-pointer border border-line bg-white px-2 py-1 text-xs font-bold uppercase tracking-wide text-steel hover:bg-paper; }
+  .conv-tab.active { @apply border-brand bg-brand text-white; }
+  .conv-list { @apply m-0 flex-1 list-none overflow-y-auto p-0; }
+  .conv-item { @apply flex w-full cursor-pointer items-start gap-2 border-b border-line bg-white px-3 py-3 text-left hover:bg-paper; }
+  .conv-item.active { @apply bg-red-50; }
+  .conv-avatar { @apply grid size-9 shrink-0 place-items-center bg-steel text-xs font-bold text-white; }
+  .conv-item-body { @apply flex min-w-0 flex-1 flex-col gap-0.5; }
+  .conv-item-top { @apply flex items-center justify-between gap-2; }
+  .conv-item-top b { @apply truncate text-sm; }
+  .conv-item-preview { @apply truncate text-xs text-neutral-500; }
+  .conv-item-bottom { @apply flex items-center justify-between gap-2; }
+  .conv-status-open { @apply bg-sky-600; }
+  .conv-status-human { @apply bg-warn; }
+  .conv-status-closed { @apply bg-neutral-400; }
+  .conv-thread-pane { @apply flex min-w-0 flex-col; }
+  .conv-thread-head { @apply flex items-center justify-between gap-2 border-b border-line bg-paper px-4 py-3; }
+  .conv-thread-head small { @apply block; }
+  .conv-thread { @apply flex-1 space-y-2 overflow-y-auto bg-neutral-50 p-4; }
+  .conv-empty { @apply grid flex-1 place-items-center text-sm text-neutral-500; }
+  .conv-bubble { @apply max-w-[75%] rounded border border-line bg-white px-3 py-2 text-sm shadow-sm; }
+  .conv-bubble p { @apply m-0 whitespace-pre-wrap; }
+  .conv-bubble.in { @apply mr-auto; }
+  .conv-bubble.out { @apply ml-auto border-transparent bg-sky-100; }
+  .conv-bubble.sent-human { @apply bg-amber-100; }
+  .conv-bubble.sent-system { @apply bg-neutral-200; }
+  .conv-bubble-sender { @apply mb-0.5 block text-[10px] font-bold uppercase tracking-wide text-steel; }
+  .conv-bubble-time { @apply mt-1 block text-right text-[10px] text-neutral-400; }
 }
