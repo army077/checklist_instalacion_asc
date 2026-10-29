@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { useAdminAuth } from '../auth/AdminAuth'
 import {
   getConversationContext,
   listConversations,
@@ -54,6 +55,7 @@ function fullTimestamp(iso: string) {
 }
 
 export default function Conversations() {
+  const { logout } = useAdminAuth()
   const [status, setStatus] = useState<ConversationStatus | ''>('')
   const [search, setSearch] = useState('')
   const [conversations, setConversations] = useState<ConversationSummary[]>([])
@@ -133,7 +135,10 @@ export default function Conversations() {
           <h1>Conversaciones</h1>
           <small>Lectura en vivo del bot de WhatsApp (API18) · próximamente intervención humana</small>
         </div>
-        <Link className="btn ghost" to="/admin">← Volver al panel</Link>
+        <div className="header-actions">
+          <Link className="btn ghost" to="/admin">← Volver al panel</Link>
+          <button className="btn ghost" type="button" onClick={() => { void logout() }}>Cerrar sesión</button>
+        </div>
       </header>
 
       <p className="demo-note">

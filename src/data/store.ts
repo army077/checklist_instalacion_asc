@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from 'react'
 import { lineById, type Question } from './catalog'
+import { fetchSheetQuestions, type SheetQuestion } from './googleSheets'
 
 export type Phase = 'logistics' | 'installation'
 export type ResponseType = 'yes-no' | 'text' | 'number' | 'choice'
@@ -44,6 +45,10 @@ interface ModelConfig {
 
 const ORDER_KEY = 'asc-orders-v2'
 const CONFIG_KEY = 'asc-question-config-v1'
+const SHEETS_CSV_URL = (import.meta.env.VITE_GOOGLE_SHEETS_CSV_URL as string | undefined)?.trim()
+const SHEETS_MODE = (import.meta.env.VITE_GOOGLE_SHEETS_MODE as string | undefined)?.trim().toLowerCase() === 'replace'
+  ? 'replace'
+  : 'append'
 const conversations = {
   shoppro: '09af8a9fb95a8b091a8c02a3828e589c6408c1d672856',
   fiberx0: '2d14ac7c-1b7f-42c3-9b23-4f3af6201001',
@@ -84,6 +89,19 @@ const readOrders = (): Order[] => {
 
 let orders = readOrders()
 let modelConfigs: Record<string, ModelConfig> = {}
+let sheetQuestions: SheetQuestion[] = []
+let sheetStatus: {
+  state: 'disabled' | 'loading' | 'ready' | 'error'
+  questionCount: number
+  mode: 'append' | 'replace'
+  source?: string
+  error?: string
+} = {
+  state: SHEETS_CSV_URL ? 'loading' : 'disabled',
+  questionCount: 0,
+  mode: SHEETS_MODE,
+  source: SHEETS_CSV_URL,
+}
 try {
   const raw = localStorage.getItem(CONFIG_KEY)
   if (raw) modelConfigs = JSON.parse(raw) as Record<string, ModelConfig>
@@ -112,11 +130,73 @@ const subscribe = (listener: () => void) => {
   listeners.add(listener)
   return () => { listeners.delete(listener) }
 }
+const publish = () => listeners.forEach((listener) => listener())
+
+const matchesLine = (line: string | undefined, orderLine: string) => !line || line === orderLine
+const toQuestion = (question: SheetQuestion): Question => ({
+  id: question.id,
+  title: question.title,
+  text: () => question.prompt,
+  phase: question.phase,
+  responseType: question.responseType,
+  options: question.options,
+  critical: question.critical,
+  photo: question.photo,
+  checklistMeta: {
+    clientFacing: question.clientFacing,
+    gate: question.gate,
+    evidence: question.evidence,
+    capture: question.capture,
+    validate: question.validate,
+    noPass: question.noPass,
+    support: question.support,
+    status: question.status,
+    responsible: question.responsible,
+    targetDate: question.targetDate,
+    comments: question.comments,
+  },
+})
+
+const sheetQuestionsForOrder = (order: Order): Question[] =>
+  sheetQuestions
+    .filter((question) => matchesLine(question.line, order.line))
+    .map(toQuestion)
+
+export const refreshSheetQuestions = async () => {
+  if (!SHEETS_CSV_URL) return
+  sheetStatus = { ...sheetStatus, state: 'loading', error: undefined }
+  publish()
+  try {
+    const loaded = await fetchSheetQuestions(SHEETS_CSV_URL)
+    sheetQuestions = loaded
+    sheetStatus = {
+      ...sheetStatus,
+      state: 'ready',
+      questionCount: loaded.length,
+      error: undefined,
+    }
+  } catch (error) {
+    sheetQuestions = []
+    sheetStatus = {
+      ...sheetStatus,
+      state: 'error',
+      questionCount: 0,
+      error: error instanceof Error ? error.message : String(error),
+    }
+  }
+  publish()
+}
+
+if (SHEETS_CSV_URL) {
+  void refreshSheetQuestions()
+}
 
 export const useOrders = () => useSyncExternalStore(subscribe, () => orders)
 export const useQuestionConfigs = () => useSyncExternalStore(subscribe, () => modelConfigs)
+export const useSheetSourceStatus = () => useSyncExternalStore(subscribe, () => sheetStatus)
 export const useOrder = (token?: string) => {
   useSyncExternalStore(subscribe, () => modelConfigs)
+  useSyncExternalStore(subscribe, () => sheetStatus)
   return useOrders().find((order) => order.token === token)
 }
 export const findOrderById = (orderId?: string) => {
@@ -136,6 +216,29 @@ export const resetDemo = () => {
   persistOrders()
 }
 
+// Inserta o actualiza pedidos que vienen de la API, conservando
+// respuestas, citas y slots locales si el pedido ya existía.
+export const upsertApiOrders = (remote: Order[]) => {
+  if (!remote.length) return
+  const existingByToken = new Map(orders.map((order) => [order.token, order]))
+  const merged = remote.map((incoming) => {
+    const existing = existingByToken.get(incoming.token)
+    if (!existing) return incoming
+    return {
+      ...incoming,
+      answers: existing.answers,
+      submitted: existing.submitted,
+      appointments: existing.appointments,
+      deliverySlots: existing.deliverySlots,
+      installationSlots: existing.installationSlots,
+      techRequested: existing.techRequested,
+    }
+  })
+  const remoteTokens = new Set(remote.map((order) => order.token))
+  orders = [...merged, ...orders.filter((order) => !remoteTokens.has(order.token))]
+  persistOrders()
+}
+
 export const configurationKey = (order: Order) =>
   [order.line, ...Object.entries(order.entry).sort(([left], [right]) => left.localeCompare(right)).flat()].join('|')
 
@@ -150,7 +253,7 @@ const logisticsQuestionIds: Record<string, string[]> = {
 
 export const visibleQuestions = (order: Order, phase?: Phase): Question[] => {
   const config = modelConfig(order)
-  return lineById(order.line).questions
+  const baseQuestions = lineById(order.line).questions
     .filter((question) => !question.when || question.when(order.entry))
     .map((question) => {
       const override = config?.questions[question.id]
@@ -165,7 +268,11 @@ export const visibleQuestions = (order: Order, phase?: Phase): Question[] => {
         critical: override?.critical ?? question.critical,
       }
     })
-    .filter((question) => !phase || question.phase === phase)
+  const externalQuestions = sheetQuestionsForOrder(order)
+  const combined = sheetStatus.state === 'ready' && SHEETS_MODE === 'replace'
+    ? externalQuestions
+    : [...externalQuestions, ...baseQuestions]
+  return combined.filter((question) => !phase || question.phase === phase)
 }
 
 export const saveQuestionConfig = (order: Order, questionId: string, config: QuestionConfig) => {

@@ -1,0 +1,1 @@
+{"root":["./src/main.tsx","./src/data/api18.ts","./src/data/api19.ts","./src/data/catalog.ts","./src/data/store.ts","./src/pages/admin.tsx","./src/pages/clientpage.tsx","./src/pages/conversations.tsx"],"errors":true,"version":"6.0.3"}

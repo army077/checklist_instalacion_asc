@@ -70,6 +70,17 @@ export type ConversationDetail = {
   messages: ConversationMessage[]
 }
 
+export type boletinesConversationBridge = {
+  id: string,
+  conversation_id: string,
+  boletin_id: string,
+  es_principal: boolean,
+  estado_proceso: string,
+  created_at: string,
+  updated_at: string
+}
+
+
 async function request<T>(path: string): Promise<T> {
   const response = await fetch(`${API18_BASE}${path}`)
   const payload = await response.json().catch(() => null)
@@ -91,4 +102,11 @@ export async function listConversations(params: { status?: ConversationStatus | 
 export async function getConversationContext(conversationId: string) {
   const payload = await request<ConversationDetail>(`/conversations/${conversationId}/context?limit=100`)
   return payload
+}
+
+export async function listBoletinesConversationBridge(params: { conversation_id?: string } = {}) {
+  const query = new URLSearchParams()
+  if (params.conversation_id) query.set('conversation_id', params.conversation_id)
+  const payload = await request<{ bridges: boletinesConversationBridge[] }>(`/boletines_conversation_bridge?${query.toString()}`)
+  return payload.bridges
 }

@@ -1,8 +1,10 @@
 import { Fragment, useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import logo from '../assets/logo_ar.png'
+import { useAdminAuth } from '../auth/AdminAuth'
+import logo from '../assets/LOGO_ASIAROBOTICA.png'
+import { boletinToOrder, fetchBoletinesEmitidos } from '../data/api19'
 import { LINES, lineById } from '../data/catalog'
-import { fmtSlot, getVars, resetDemo, saveQuestionConfig, saveRegulator, statusOf, updateOrder, useOrder, useOrders, useQuestionConfigs, visibleQuestions, type Appointment, type Phase, type ResponseType } from '../data/store'
+import { fmtSlot, getVars, saveQuestionConfig, saveRegulator, statusOf, upsertApiOrders, useOrder, useOrders, useQuestionConfigs, useSheetSourceStatus, visibleQuestions, type Appointment, type Phase, type ResponseType } from '../data/store'
 
 const LABEL = { incomplete: 'En proceso', ready: 'Listo', issues: 'Con pendientes', blocked: 'Bloqueado' } as const
 
@@ -62,22 +64,78 @@ const orderColor = (
   return 'in-progress'
 }
 
+const PAGE_SIZE = 10
+
 export function AdminList() {
+  const { logout } = useAdminAuth()
   const orders = useOrders()
   const [copied, setCopied] = useState('')
+  const [apiState, setApiState] = useState<'loading' | 'ok' | 'error'>('loading')
+  const [apiError, setApiError] = useState('')
+  const [page, setPage] = useState(1)
+  const [pageTokens, setPageTokens] = useState<string[]>([])
+  const [hasMore, setHasMore] = useState(false)
+  const [searchInput, setSearchInput] = useState('')
+  const [search, setSearch] = useState('')
+
+  useEffect(() => {
+    let cancelled = false
+    setApiState('loading')
+    fetchBoletinesEmitidos({ page, limit: PAGE_SIZE, search })
+      .then((boletines) => {
+        if (cancelled) return
+        const mapped = boletines.map(boletinToOrder)
+        upsertApiOrders(mapped)
+        setPageTokens(mapped.map((order) => order.token))
+        setHasMore(boletines.length === PAGE_SIZE)
+        setApiState('ok')
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return
+        setApiError(error instanceof Error ? error.message : String(error))
+        setApiState('error')
+      })
+    return () => { cancelled = true }
+  }, [page, search])
+
+  // Con el back conectado solo se muestran los boletines de la página actual;
+  // si hay error de conexión se ven los pedidos de demostración.
+  const visibleOrders = apiState === 'error'
+    ? orders
+    : pageTokens
+        .map((token) => orders.find((order) => order.token === token))
+        .filter((order): order is (typeof orders)[number] => !!order)
   const link = (order: (typeof orders)[number]) => `${location.origin}/confirm/${order.orderId}/${order.conversationId}?channel=whatsapp`
   return (
     <div className="admin">
       <header className="admin-head">
-        <h1><img className="logo" src={logo} alt="" style={{ verticalAlign: 'middle', marginRight: 10 }} />Panel de instalaciones</h1>
+        <h1><img className="logo" src={logo} alt="" style={{ verticalAlign: 'middle', marginRight: 10 }} />Panel de clientes</h1>
         <div className="header-actions">
           <Link className="btn ghost" to="/admin/conversaciones">Conversaciones</Link>
-          <Link className="btn ghost" to="/admin/config">Configurar preguntas</Link>
-          <button className="btn ghost" onClick={() => confirm('¿Reiniciar los datos de demo?') && resetDemo()}>Reiniciar demo</button>
+          <button className="btn ghost" type="button" onClick={() => { void logout() }}>Cerrar sesión</button>
+          {/* <Link className="btn ghost" to="/admin/config">Configurar preguntas</Link> */}
+          {/* <button className="btn ghost" onClick={() => confirm('¿Reiniciar los datos de demo?') && resetDemo()}>Reiniciar demo</button> */}
         </div>
       </header>
+      <form className="search" onSubmit={(event) => { event.preventDefault(); setPage(1); setSearch(searchInput.trim()) }}>
+        <input type="search" placeholder="Buscar por nombre de cliente o pedido…" value={searchInput} onChange={(event) => setSearchInput(event.target.value)} />
+        <button className="btn ghost" type="submit" disabled={apiState === 'loading'}>Buscar</button>
+        {search && <button className="btn ghost" type="button" onClick={() => { setSearchInput(''); setPage(1); setSearch('') }}>Limpiar</button>}
+      </form>
+      {/* {sheetSource.state !== 'disabled' && (
+        <div className={`notice ${sheetSource.state === 'error' ? 'bad' : 'info'}`}>
+          {sheetSource.state === 'loading' && <p>Sincronizando preguntas desde Google Sheets…</p>}
+          {sheetSource.state === 'ready' && <p>Preguntas cargadas desde Google Sheets: {sheetSource.questionCount}. Modo: {sheetSource.mode === 'replace' ? 'reemplazar catálogo' : 'sumar al catálogo'}.</p>}
+          {sheetSource.state === 'error' && (
+            <p>
+              No fue posible cargar Google Sheets ({sheetSource.error}). Se usa el catálogo local.
+              <button className="btn ghost" style={{ marginLeft: 8 }} onClick={() => { void refreshSheetQuestions() }}>Reintentar</button>
+            </p>
+          )}
+        </div>
+      )} */}
       <div className="table">
-        {orders.map((order) => {
+        {visibleOrders.map((order) => {
           const logistics = statusOf(order, 'logistics')
           const installation = statusOf(order, 'installation')
           const line = lineById(order.line)
@@ -88,7 +146,7 @@ export function AdminList() {
             <div className={`row ${rowState}`} key={order.token} title={`Estado del pedido: ${rowState === 'needs-booking' ? 'preparación lista, falta agendar' : rowState === 'complete' ? 'citas confirmadas' : rowState}`}>
               <div className="grow">
                 <b>{order.folio} · {order.cliente}</b>
-                <small>{line.icon} {line.name} {order.entry.modelo ?? order.entry.potencia} · {order.empresa} · {order.ciudad}</small>
+                <small>⚙️ {line.name} {order.entry.modelo ?? order.entry.potencia} · {order.empresa} · {order.ciudad}</small>
                 <small className={`phase-line ${logisticsSummary.className}`}>
                   <b>Logística: {logistics.answered}/{logistics.total}</b> · {logisticsSummary.text}
                 </small>
@@ -104,12 +162,22 @@ export function AdminList() {
           )
         })}
       </div>
-      <p className="demo-note">Enlace de demostración: /confirm/{'{pedido}'}/{'{conversationId}'}?channel=whatsapp. No está conectado al servicio real.</p>
+      {apiState === 'loading' && <p className="demo-note">Conectando ccon el servidor para cargar los boletines emitidos…</p>}
+      {apiState === 'error' && <p className="demo-note">No se pudo conectar con API19 ({apiError}). Se muestran los pedidos de demostración.</p>}
+      {apiState === 'ok' && !visibleOrders.length && <p className="demo-note">No hay boletines en esta página.</p>}
+      {apiState !== 'error' && (
+        <div className="pagination">
+          <button className="btn ghost" disabled={page === 1 || apiState === 'loading'} onClick={() => setPage((current) => Math.max(1, current - 1))}>← Anterior</button>
+          <span>Página {page}</span>
+          <button className="btn ghost" disabled={apiState === 'loading' || !hasMore} onClick={() => setPage((current) => current + 1)}>Siguiente →</button>
+        </div>
+      )}
     </div>
   )
 }
 
 export function AdminDetail() {
+  const { logout } = useAdminAuth()
   const { token } = useParams()
   const order = useOrder(token)
   if (!order) return <div className="admin"><Link to="/admin">← Volver</Link><p>Pedido no encontrado.</p></div>
@@ -122,12 +190,17 @@ export function AdminDetail() {
       <Link to="/admin">← Volver</Link>
       <header className="admin-head">
         <div><h1>{order.folio} · {order.cliente}</h1><small>{order.empresa} · {order.ciudad}</small></div>
-        <Link className="btn ghost" to="/admin/config">Editar checklist</Link>
+        <button className="btn ghost" type="button" onClick={() => { void logout() }}>Cerrar sesión</button>
+        {/* <Link className="btn ghost" to="/admin/config">Editar checklist</Link> */}
       </header>
       <section className="panel">
         <h3>Equipo</h3>
         <dl className="facts">
-          {line.entryFields.map((field) => <Fragment key={field.key}><dt>{field.label}</dt><dd>{order.entry[field.key]}</dd></Fragment>)}
+          {line.entryFields
+            .filter((field) => order.entry[field.key])
+            .map((field) => <Fragment key={field.key}><dt>{field.label}</dt><dd>{order.entry[field.key]}</dd></Fragment>)}
+          {order.entry.modelo && <><dt>Detalle equipo </dt><dd>{order.entry.modelo}</dd></>}
+          {order.entry.accesorios && <><dt>Detalle accesorios</dt><dd>{order.entry.accesorios}</dd></>}
           {Object.entries(vars).map(([key, value]) => <Fragment key={key}><dt>{key}</dt><dd>{value}</dd></Fragment>)}
         </dl>
       </section>
@@ -151,7 +224,7 @@ export function AdminDetail() {
           </section>
         )
       })}
-      <section className="panel">
+      {/* <section className="panel">
         <h3>Citas independientes</h3>
         <p><b>Entrega:</b> {appointmentSummary(order.appointments.delivery)}</p>
         <p><b>Instalación:</b> {appointmentSummary(order.appointments.installation)}</p>
@@ -163,14 +236,16 @@ export function AdminDetail() {
           {order.techRequested ? '🔧 Técnico solicitado' : 'Solicitar técnico'}
         </button>
         {!['ready', 'issues'].includes(installation.state) && <small className="block">La logística puede estar lista aunque la fase de instalación siga bloqueada.</small>}
-      </section>
+      </section> */}
     </div>
   )
 }
 
 export function AdminConfig() {
+  const { logout } = useAdminAuth()
   const orders = useOrders()
   useQuestionConfigs()
+  const sheetSource = useSheetSourceStatus()
   const [role, setRole] = useState<'logistics' | 'engineering'>('logistics')
   const [lineId, setLineId] = useState(orders[0]?.line ?? '')
   const [entry, setEntry] = useState<Record<string, string>>(orders[0]?.entry ?? {})
@@ -190,7 +265,15 @@ export function AdminConfig() {
       <Link to="/admin">← Volver al panel</Link>
       <header className="admin-head">
         <div><h1>Configuración de checklist</h1><small>La edición es una simulación local de permisos por área.</small></div>
+        <button className="btn ghost" type="button" onClick={() => { void logout() }}>Cerrar sesión</button>
       </header>
+      {sheetSource.state !== 'disabled' && (
+        <div className={`notice ${sheetSource.state === 'error' ? 'bad' : 'info'}`}>
+          {sheetSource.state === 'loading' && <p>Sincronizando preguntas desde Google Sheets…</p>}
+          {sheetSource.state === 'ready' && <p>Preguntas activas desde Google Sheets: {sheetSource.questionCount} ({sheetSource.mode === 'replace' ? 'reemplaza catálogo base' : 'sumadas al catálogo base'}).</p>}
+          {sheetSource.state === 'error' && <p>No fue posible cargar Google Sheets ({sheetSource.error}). Se usa el catálogo local.</p>}
+        </div>
+      )}
       <div className="role-switch" aria-label="Área que configura">
         <button className={`btn ${role === 'logistics' ? 'primary' : 'ghost'}`} onClick={() => setRole('logistics')}>Área de Logística</button>
         <button className={`btn ${role === 'engineering' ? 'primary' : 'ghost'}`} onClick={() => setRole('engineering')}>Área de Ingeniería</button>

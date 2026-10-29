@@ -25,7 +25,7 @@
 @layer components {
   .client { @apply mx-auto flex min-h-screen max-w-xl flex-col; }
   .brand { @apply flex items-center gap-3 border-b-4 border-brand bg-steel px-4 py-2 text-sm font-semibold uppercase tracking-wider text-white; }
-  .logo { @apply block size-10; }
+  .logo { @apply h-10 w-auto; }
   .bar { @apply h-1.5 bg-line; }
   .bar i { @apply block h-full bg-brand transition-all; }
   .card { @apply m-4 flex-1 border border-line border-t-4 border-t-steel bg-white p-5 shadow-sm; }
@@ -62,6 +62,12 @@
   .summary { @apply m-0 mb-3 list-none border border-line p-0; }
   .summary li { @apply flex items-center gap-3 border-b border-line px-3 py-2 text-sm last:border-b-0; }
   .summary li span:nth-child(2) { @apply flex-1; }
+  .checklist { @apply m-0 grid list-none gap-3 p-0; }
+  .check-item { @apply border border-line bg-paper p-3; }
+  .check-item.answered { @apply border-l-4 border-l-ok; }
+  .check-item.pending { @apply border-l-4 border-l-warn; }
+  .check-item h2 { @apply m-0 mb-2 text-sm font-bold uppercase tracking-wide; }
+  .check-meta { @apply my-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 border border-line bg-white p-2; }
   .dot { @apply grid size-6 place-items-center text-xs font-bold text-white; }
   .ok .dot { @apply bg-ok; }
   .no .dot { @apply bg-brand; }
@@ -83,6 +89,9 @@
   .phase-actions { @apply mt-3; }
   .phase-card .notice { @apply mb-0; }
   .demo-note { @apply mt-4 border border-dashed border-line bg-paper p-3 text-xs text-neutral-600; }
+  .pagination { @apply mt-4 flex items-center justify-center gap-3 text-sm; }
+  .search { @apply mb-4 flex flex-wrap items-center gap-2; }
+  .search input { @apply grow rounded border border-line bg-paper px-3 py-2 text-sm; }
   .full-width { @apply mt-3 w-full; }
   .response-field { @apply my-3 grid gap-1 text-xs font-bold uppercase tracking-wider text-steel; }
   .response-field input, .response-field select { @apply border border-line bg-white px-3 py-2 text-sm font-normal normal-case; }
@@ -97,6 +106,9 @@
   .admin { @apply mx-auto max-w-5xl p-5; }
   .admin-head { @apply mb-4 flex items-center justify-between gap-3 border-b-4 border-brand pb-3; }
   .admin-head h1 { @apply m-0; }
+  .admin-auth-screen { @apply grid min-h-screen place-items-center bg-paper p-4; }
+  .admin-auth-card { @apply w-full max-w-md border border-line border-t-4 border-t-brand bg-white p-6 shadow-sm; }
+  .admin-auth-card p { @apply text-sm text-neutral-700; }
   .table { @apply grid gap-2; }
   .row { @apply flex flex-wrap items-center gap-2 border border-line border-l-4 border-l-steel bg-white p-3; }
   .row.needs-booking { @apply border-l-warn bg-amber-50; }

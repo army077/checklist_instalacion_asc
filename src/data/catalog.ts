@@ -18,6 +18,19 @@ export interface Question {
   photo?: 'required' | 'optional'
   critical?: boolean
   when?: (e: Entry) => boolean
+  checklistMeta?: {
+    clientFacing?: boolean
+    gate?: string
+    evidence?: string
+    capture?: string
+    validate?: string
+    noPass?: string
+    support?: string
+    status?: string
+    responsible?: string
+    targetDate?: string
+    comments?: string
+  }
 }
 
 export interface Line {

@@ -1,18 +1,44 @@
-import { Fragment, useRef, useState } from 'react'
+import { Fragment, useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
-import logo from '../assets/logo_ar.png'
-import { lineById } from '../data/catalog'
-import { compressImage, findOrderById, fmtSlot, getVars, statusOf, updateOrder, useOrder, visibleQuestions, type Order, type Phase } from '../data/store'
+import logo from '../assets/ar_logo.png'
+import { lineById, type Question } from '../data/catalog'
+import { boletinToOrder, fetchBoletinEmitido } from '../data/api19'
+import { compressImage, fmtSlot, getVars, updateOrder, upsertApiOrders, useOrder, useSheetSourceStatus, visibleQuestions, type Order, type Phase } from '../data/store'
+
+const API_TOKEN_PREFIX = 'api19-'
 
 type View = 'home' | 'questions' | 'summary' | 'schedule'
 type AppointmentKind = 'delivery' | 'installation'
+type ChecklistStatus = {
+  total: number
+  answered: number
+  unanswered: Question[]
+  pending: Question[]
+  criticalPending: Question[]
+  state: 'incomplete' | 'ready' | 'issues' | 'blocked'
+}
+
+const isClientFacingQuestion = (question: Question) => question.checklistMeta?.clientFacing !== false
+const isSheetQuestion = (question: Question) => question.id.startsWith('gs-')
+const statusFromQuestions = (order: Order, questions: Question[]): ChecklistStatus => {
+  const answered = questions.filter((question) => !!order.answers[question.id]?.ans).length
+  const unanswered = questions.filter((question) => !order.answers[question.id]?.ans)
+  const pending = questions.filter((question) => {
+    const type = question.responseType ?? 'yes-no'
+    const answer = order.answers[question.id]?.ans.trim().toLocaleLowerCase('es-MX')
+    return (type === 'yes-no' || type === 'choice') && (answer === 'no' || answer === 'todavía no')
+  })
+  const criticalPending = pending.filter((question) => question.critical)
+  const state = unanswered.length ? 'incomplete' : criticalPending.length ? 'blocked' : pending.length ? 'issues' : 'ready'
+  return { total: questions.length, answered, unanswered, pending, criticalPending, state }
+}
 
 function Shell({ children, progress }: { children: React.ReactNode; progress?: number }) {
   return (
     <div className="client">
       <header className="brand">
         <img className="logo" src={logo} alt="Asia Robótica" />
-        <span>Asia Robótica · Preparación de instalación</span>
+        <span>Preparación de entrega e instalación</span>
       </header>
       {progress !== undefined && <div className="bar"><i style={{ width: `${progress * 100}%` }} /></div>}
       <main className="card">{children}</main>
@@ -23,30 +49,69 @@ function Shell({ children, progress }: { children: React.ReactNode; progress?: n
 
 export default function ClientPage() {
   const { token, orderId, conversationId } = useParams()
-  const tokenOrder = useOrder(token)
-  const idOrder = findOrderById(orderId)
-  const order = token ? tokenOrder : idOrder
+  const boletinId = orderId ?? (token?.startsWith(API_TOKEN_PREFIX) ? token.slice(API_TOKEN_PREFIX.length) : undefined)
+  const order = useOrder(boletinId ? `${API_TOKEN_PREFIX}${boletinId}` : undefined)
+  const sheetSource = useSheetSourceStatus()
+  const [load, setLoad] = useState<{ id?: string; error?: string }>({})
   const [view, setView] = useState<View>('home')
   const [phase, setPhase] = useState<Phase>('logistics')
   const [appointmentKind, setAppointmentKind] = useState<AppointmentKind>('delivery')
   const [idx, setIdx] = useState(0)
+
+  useEffect(() => {
+    if (!boletinId) return
+    let cancelled = false
+    fetchBoletinEmitido(boletinId)
+      .then((boletin) => {
+        if (cancelled) return
+        upsertApiOrders([boletinToOrder(boletin)])
+        setLoad({ id: boletinId })
+      })
+      .catch((error) => {
+        if (!cancelled) setLoad({ id: boletinId, error: error instanceof Error ? error.message : 'No se pudo consultar el pedido.' })
+      })
+    return () => { cancelled = true }
+  }, [boletinId])
+
+  if (boletinId && load.id !== boletinId) {
+    return (
+      <Shell>
+        <p>Cargando información de tu pedido…</p>
+      </Shell>
+    )
+  }
+
   const validConversation = !conversationId || order?.conversationId === conversationId
 
   if (!order || !validConversation) {
     return (
       <Shell>
-        <div className="notice info"><h2>Enlace no válido</h2><p>Este enlace no existe o expiró. Pide a tu asesor que te envíe uno nuevo.</p></div>
+        <div className="notice info">
+          <h2>Enlace no válido</h2>
+          <p>{load.error ? `No pudimos consultar tu pedido (${load.error}).` : 'Este enlace no existe o expiró.'} Pide a tu asesor que te envíe uno nuevo.</p>
+        </div>
       </Shell>
     )
   }
 
   const line = lineById(order.line)
-  const logisticsStatus = statusOf(order, 'logistics')
-  const installationStatus = statusOf(order, 'installation')
+  const allLogisticsQuestions = visibleQuestions(order, 'logistics')
+  const allInstallationQuestions = visibleQuestions(order, 'installation')
+  const questionsForClient = (questions: Question[]) => {
+    const scoped = sheetSource.state === 'ready' ? questions.filter(isSheetQuestion) : questions
+    const clientFacing = scoped.filter(isClientFacingQuestion)
+    if (clientFacing.length > 0) return clientFacing
+    if (scoped.length > 0) return scoped
+    return questions
+  }
+  const logisticsQuestions = questionsForClient(allLogisticsQuestions)
+  const installationQuestions = questionsForClient(allInstallationQuestions)
+  const logisticsStatus = statusFromQuestions(order, logisticsQuestions)
+  const installationStatus = statusFromQuestions(order, installationQuestions)
   const currentStatus = phase === 'logistics' ? logisticsStatus : installationStatus
 
   const startPhase = (nextPhase: Phase) => {
-    const questions = visibleQuestions(order, nextPhase)
+    const questions = nextPhase === 'logistics' ? logisticsQuestions : installationQuestions
     const firstUnanswered = questions.findIndex((question) => !order.answers[question.id]?.ans)
     setPhase(nextPhase)
     setIdx(firstUnanswered < 0 ? Math.max(0, questions.length - 1) : firstUnanswered)
@@ -63,11 +128,14 @@ export default function ClientPage() {
       <Shell>
         <p className="eyebrow">{line.icon} {line.name} · {order.folio}</p>
         <h1>¡Hola, {order.cliente.split(' ')[0]}!</h1>
+        {sheetSource.state === 'error' && <div className="notice warn">Estamos usando las preguntas base porque no pudimos sincronizar Google Sheets.</div>}
         <p>Confirma por separado que el sitio está listo para recibir tu equipo y para instalarlo. Puedes agendar la entrega aunque todavía haya preparativos de instalación pendientes.</p>
         <dl className="facts">
           <dt>Empresa</dt><dd>{order.empresa}</dd>
           <dt>Ciudad</dt><dd>{order.ciudad}</dd>
-          {line.entryFields.map((field) => <Fragment key={field.key}><dt>{field.label}</dt><dd>{order.entry[field.key]}</dd></Fragment>)}
+          <dt>Equipo</dt><dd>{order.entry.modelo}</dd>
+          {line.entryFields.filter((field) => order.entry[field.key]).map((field) => <Fragment key={field.key}><dt>{field.label}</dt><dd>{order.entry[field.key]}</dd></Fragment>)}
+          {order.entry.accesorios && <><dt>Accesorios</dt><dd>{order.entry.accesorios}</dd></>}
         </dl>
         <PhaseCard
           title="1. Logística y maniobras"
@@ -85,18 +153,18 @@ export default function ClientPage() {
           onChecklist={() => startPhase('installation')}
           onSchedule={() => schedule('installation')}
         />
-        <p className="demo-note">Demo local: cambios y citas guardados en este navegador.</p>
+        {/* <p className="demo-note">Demo local: cambios y citas guardados en este navegador.</p> */}
       </Shell>
     )
   }
 
   if (view === 'questions') {
     return (
-      <QuestionStep
+      <ChecklistStep
         order={order}
         phase={phase}
+        questions={phase === 'logistics' ? logisticsQuestions : installationQuestions}
         idx={idx}
-        setIdx={setIdx}
         back={() => setView('home')}
         done={() => setView('summary')}
       />
@@ -114,7 +182,7 @@ export default function ClientPage() {
     )
   }
 
-  const questions = visibleQuestions(order, phase)
+  const questions = phase === 'logistics' ? logisticsQuestions : installationQuestions
   return (
     <Shell progress={1}>
       <p className="eyebrow">{phase === 'logistics' ? 'Logística y maniobras' : 'Instalación y capacitación'}</p>
@@ -138,9 +206,9 @@ export default function ClientPage() {
               ? 'Esta fase está lista.'
               : `Hay ${currentStatus.pending.length} punto(s) pendiente(s) no crítico(s). La cita puede solicitarse y el equipo dará seguimiento.`}
           </div>
-          <button className="btn primary" onClick={() => schedule(phase === 'logistics' ? 'delivery' : 'installation')}>
+          {/* <button className="btn primary" onClick={() => schedule(phase === 'logistics' ? 'delivery' : 'installation')}>
             Agendar {phase === 'logistics' ? 'entrega' : 'instalación'}
-          </button>
+          </button> */}
         </>
       ) : (
         <div className="notice bad">
@@ -156,16 +224,15 @@ export default function ClientPage() {
   )
 }
 
-function PhaseCard({ title, description, status, appointment, onChecklist, onSchedule }: {
+function PhaseCard({ title, description, status, appointment, onChecklist, onSchedule: _onSchedule }: {
   title: string
   description: string
-  status: ReturnType<typeof statusOf>
+  status: ChecklistStatus
   appointment: Order['appointments']['delivery']
   onChecklist: () => void
   onSchedule: () => void
 }) {
   const label = { incomplete: 'En proceso', ready: 'Listo', issues: 'Con pendientes', blocked: 'Bloqueado' }[status.state]
-  const canSchedule = status.state === 'ready' || status.state === 'issues'
   const date = appointment.status === 'confirmed' && appointment.slot ? fmtSlot(appointment.slot) : undefined
   return (
     <section className="phase-card">
@@ -178,101 +245,150 @@ function PhaseCard({ title, description, status, appointment, onChecklist, onSch
       {appointment.status === 'proposed' && <p className="notice warn">Propuesta enviada: {appointment.proposedDate}. {appointment.note}</p>}
       <div className="phase-actions">
         <button className="btn ghost" onClick={onChecklist}>Revisar requisitos</button>
-        <button className="btn primary" disabled={!canSchedule} onClick={onSchedule}>
+        {/* <button className="btn primary" disabled={!canSchedule} onClick={onSchedule}>
           {appointment.status === 'confirmed' ? 'Cambiar cita' : `Agendar ${title.startsWith('1.') ? 'entrega' : 'instalación'}`}
-        </button>
+        </button> */}
       </div>
     </section>
   )
 }
 
-function QuestionStep({ order, phase, idx, setIdx, done, back }: {
+function ChecklistStep({ order, phase, questions, idx, done, back }: {
   order: Order
   phase: Phase
+  questions: Question[]
   idx: number
-  setIdx: (n: number) => void
   done: () => void
   back: () => void
 }) {
-  const questions = visibleQuestions(order, phase)
-  const question = questions[idx]
   const vars = getVars(order)
-  const answer = order.answers[question.id]
-  const fileRef = useRef<HTMLInputElement>(null)
-  const [busy, setBusy] = useState(false)
-  const [photoError, setPhotoError] = useState('')
+  const [busyById, setBusyById] = useState<Record<string, boolean>>({})
+  const [photoErrorById, setPhotoErrorById] = useState<Record<string, string>>({})
+  const answered = questions.filter((question) => !!order.answers[question.id]?.ans).length
 
-  const setAnswer = (value: string) =>
-    updateOrder(order.token, (current) => ({ ...current, answers: { ...current.answers, [question.id]: { ...current.answers[question.id], ans: value } } }))
+  useEffect(() => {
+    const targetId = questions[idx]?.id
+    if (!targetId) return
+    const target = document.getElementById(`check-${targetId}`)
+    target?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }, [idx, questions])
 
-  const onFile = async (file?: File) => {
+  const setAnswer = (questionId: string, value: string) =>
+    updateOrder(order.token, (current) => ({ ...current, answers: { ...current.answers, [questionId]: { ...current.answers[questionId], ans: value } } }))
+
+  const onFile = async (questionId: string, file?: File) => {
     if (!file) return
-    setBusy(true)
-    setPhotoError('')
+    setBusyById((current) => ({ ...current, [questionId]: true }))
+    setPhotoErrorById((current) => ({ ...current, [questionId]: '' }))
     try {
       const photo = await compressImage(file)
-      updateOrder(order.token, (current) => ({ ...current, answers: { ...current.answers, [question.id]: { ...current.answers[question.id], ans: current.answers[question.id]?.ans ?? '', photo } } }))
+      updateOrder(order.token, (current) => ({ ...current, answers: { ...current.answers, [questionId]: { ...current.answers[questionId], ans: current.answers[questionId]?.ans ?? '', photo } } }))
     } catch (error) {
-      setPhotoError(error instanceof Error ? error.message : 'No se pudo procesar la imagen.')
+      setPhotoErrorById((current) => ({ ...current, [questionId]: error instanceof Error ? error.message : 'No se pudo procesar la imagen.' }))
     } finally {
-      setBusy(false)
+      setBusyById((current) => ({ ...current, [questionId]: false }))
     }
   }
 
-  const needsPhoto = question.photo === 'required' && answer?.ans !== 'no' && !answer?.photo
-  const canContinue = !!answer?.ans && !needsPhoto && !busy
-  const responseType = question.responseType ?? 'yes-no'
-  const responseOptions = question.options ?? []
+  const canContinue = questions.every((question) => {
+    const answer = order.answers[question.id]
+    const needsPhoto = question.photo === 'required' && answer?.ans !== 'no' && !answer?.photo
+    const busy = !!busyById[question.id]
+    return !!answer?.ans && !needsPhoto && !busy
+  })
+  const pendingCount = questions.filter((question) => {
+    const answer = order.answers[question.id]
+    const needsPhoto = question.photo === 'required' && answer?.ans !== 'no' && !answer?.photo
+    return !answer?.ans || needsPhoto
+  }).length
 
   return (
-    <Shell progress={(idx + 1) / questions.length}>
-      <p className="eyebrow">{phase === 'logistics' ? 'Logística y maniobras' : 'Instalación y capacitación'} · Pregunta {idx + 1} de {questions.length}</p>
-      <h1>{question.title}</h1>
-      <p className="qtext">{question.text(vars, order.entry)}</p>
-      {question.bullets && <ul className="bullets">{question.bullets.map((bullet) => <li key={bullet}>{bullet}</li>)}</ul>}
-      {question.why && <p className="why">💡 {question.why}</p>}
+    <Shell progress={questions.length ? answered / questions.length : 0}>
+      <p className="eyebrow">{phase === 'logistics' ? 'Logística y maniobras' : 'Instalación y capacitación'} · Checklist</p>
+      <h1>Checklist de preparación</h1>
+      <p>Marca cada punto según tu avance. Este checklist corresponde a la tabla de Google Sheets.</p>
+      <div className="notice info">Avance: {answered}/{questions.length} puntos respondidos.</div>
 
-      {responseType === 'yes-no' ? (
-        <div className="choices">
-          <button className={`choice yes ${answer?.ans === 'si' ? 'sel' : ''}`} onClick={() => setAnswer('si')}>Sí, ya lo tengo</button>
-          <button className={`choice no ${answer?.ans === 'no' ? 'sel' : ''}`} onClick={() => setAnswer('no')}>Todavía no</button>
-        </div>
-      ) : responseType === 'choice' ? (
-        <div className="choices response-options">
-          {responseOptions.map((option) => (
-            <button key={option} className={`choice ${answer?.ans === option ? 'sel' : ''}`} onClick={() => setAnswer(option)}>{option}</button>
-          ))}
-        </div>
-      ) : (
-        <label className="response-field">
-          {responseType === 'number' ? 'Respuesta numérica' : 'Respuesta'}
-          <input type={responseType === 'number' ? 'number' : 'text'} value={answer?.ans ?? ''} onChange={(event) => setAnswer(event.target.value)} />
-        </label>
-      )}
+      <ul className="checklist">
+        {questions.map((question, index) => {
+          const answer = order.answers[question.id]
+          const responseType = question.responseType ?? 'yes-no'
+          const responseOptions = question.options ?? []
+          const needsPhoto = question.photo === 'required' && answer?.ans !== 'no' && !answer?.photo
+          const busy = !!busyById[question.id]
+          const meta = question.checklistMeta
 
-      {answer?.ans === 'no' && (
-        <div className={`notice ${question.critical ? 'bad' : 'warn'}`}>
-          {question.critical ? 'Este punto es necesario para esta fase. Puedes agendar entrega si la logística está lista, aunque la instalación tenga pendientes.' : 'Lo anotamos como pendiente para dar seguimiento.'}
-        </div>
-      )}
+          return (
+            <li key={question.id} id={`check-${question.id}`} className={`check-item ${answer?.ans ? 'answered' : 'pending'}`}>
+              <p className="eyebrow">Punto {index + 1}{meta?.gate ? ` · ${meta.gate}` : ''}</p>
+              <h2>{question.title}</h2>
+              <p className="qtext">{question.text(vars, order.entry)}</p>
+              {question.bullets && <ul className="bullets">{question.bullets.map((bullet) => <li key={bullet}>{bullet}</li>)}</ul>}
+              {question.why && <p className="why">💡 {question.why}</p>}
 
-      {question.photo && answer?.ans && answer.ans !== 'no' && (
-        <div className="photo">
-          <input ref={fileRef} type="file" accept="image/*" capture="environment" hidden onChange={(event) => onFile(event.target.files?.[0])} />
-          {answer.photo && <img src={answer.photo} alt="Evidencia" />}
-          <button className="btn ghost" onClick={() => fileRef.current?.click()}>
-            📷 {answer.photo ? 'Cambiar foto' : question.photo === 'required' ? 'Tomar o subir foto (obligatoria)' : 'Agregar foto (opcional)'}
-          </button>
-          {needsPhoto && <small>Necesitamos la foto para validar este punto.</small>}
-          {photoError && <small role="alert">{photoError}</small>}
-        </div>
-      )}
+              {/* {(meta?.capture || meta?.validate || meta?.status || meta?.targetDate) && (
+                <dl className="check-meta">
+                  {meta.capture && <><dt>Captura</dt><dd>{meta.capture}</dd></>}
+                  {meta.validate && <><dt>Valida</dt><dd>{meta.validate}</dd></>}
+                  {meta.status && <><dt>Estatus</dt><dd>{meta.status}</dd></>}
+                  {meta.targetDate && <><dt>Fecha objetivo</dt><dd>{meta.targetDate}</dd></>}
+                </dl>
+              )} */}
 
+              {responseType === 'yes-no' ? (
+                <div className="choices">
+                  <button className={`choice yes ${answer?.ans === 'si' ? 'sel' : ''}`} onClick={() => setAnswer(question.id, 'si')}>Sí, ya lo tengo</button>
+                  <button className={`choice no ${answer?.ans === 'no' ? 'sel' : ''}`} onClick={() => setAnswer(question.id, 'no')}>Todavía no</button>
+                </div>
+              ) : responseType === 'choice' ? (
+                <div className="choices response-options">
+                  {responseOptions.map((option) => (
+                    <button key={option} className={`choice ${answer?.ans === option ? 'sel' : ''}`} onClick={() => setAnswer(question.id, option)}>{option}</button>
+                  ))}
+                </div>
+              ) : (
+                <label className="response-field">
+                  {responseType === 'number' ? 'Respuesta numérica' : 'Respuesta'}
+                  <input type={responseType === 'number' ? 'number' : 'text'} value={answer?.ans ?? ''} onChange={(event) => setAnswer(question.id, event.target.value)} />
+                </label>
+              )}
+
+              {answer?.ans === 'no' && (
+                <div className={`notice ${question.critical ? 'bad' : 'warn'}`}>
+                  {question.critical ? 'Este punto es crítico para esta fase.' : 'Lo anotamos como pendiente para dar seguimiento.'}
+                  {meta?.noPass && <> Acción si no pasa: {meta.noPass}</>}
+                </div>
+              )}
+
+              {question.photo && answer?.ans && answer.ans !== 'no' && (
+                <div className="photo">
+                  {answer.photo && <img src={answer.photo} alt="Evidencia" />}
+                  <label className="btn ghost">
+                    📷 {answer.photo ? 'Cambiar foto' : question.photo === 'required' ? 'Tomar o subir foto (obligatoria)' : 'Agregar foto (opcional)'}
+                    <input type="file" accept="image/*" capture="environment" hidden onChange={(event) => onFile(question.id, event.target.files?.[0])} />
+                  </label>
+                  {needsPhoto && <small>Necesitamos la foto para validar este punto.</small>}
+                  {busy && <small>Procesando imagen…</small>}
+                  {photoErrorById[question.id] && <small role="alert">{photoErrorById[question.id]}</small>}
+                </div>
+              )}
+
+              {/* {(meta?.support || meta?.responsible || meta?.comments) && (
+                <p className="muted">
+                  {meta.support && <>Sustento: {meta.support}. </>}
+                  {meta.responsible && <>Responsable: {meta.responsible}. </>}
+                  {meta.comments && <>Comentarios: {meta.comments}.</>}
+                </p>
+              )} */}
+            </li>
+          )
+        })}
+      </ul>
+
+      {pendingCount > 0 && <div className="notice warn">Faltan {pendingCount} punto(s) por completar para cerrar esta fase.</div>}
       <div className="nav">
-        <button className="btn ghost" onClick={() => (idx === 0 ? back() : setIdx(idx - 1))}>← Atrás</button>
-        <button className="btn primary" disabled={!canContinue} onClick={() => (idx === questions.length - 1 ? done() : setIdx(idx + 1))}>
-          {idx === questions.length - 1 ? 'Ver resumen' : 'Siguiente →'}
-        </button>
+        <button className="btn ghost" onClick={back}>← Volver</button>
+        <button className="btn primary" disabled={!canContinue} onClick={done}>Ver resumen</button>
       </div>
     </Shell>
   )
