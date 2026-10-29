@@ -105,7 +105,9 @@ export function AdminList() {
     : pageTokens
         .map((token) => orders.find((order) => order.token === token))
         .filter((order): order is (typeof orders)[number] => !!order)
-  const link = (order: (typeof orders)[number]) => `${location.origin}/confirm/${order.orderId}/${order.conversationId}?channel=whatsapp`
+  const publicAppUrl = (import.meta.env.VITE_PUBLIC_APP_URL as string | undefined)?.replace(/\/+$/, '')
+    || 'https://asc-seguimiento.desarrollotecnologicoar.com'
+  const link = (order: (typeof orders)[number]) => `${publicAppUrl}/confirm/${order.orderId}/${order.conversationId}?channel=whatsapp`
   return (
     <div className="admin">
       <header className="admin-head">

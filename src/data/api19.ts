@@ -22,6 +22,16 @@ export type BoletinItem = {
   nomenclatura: string | null
 }
 
+export type ConversacionBridge = {
+  id: string
+  conversation_id: string
+  boletin_id: string
+  es_principal: boolean
+  estado_proceso: string
+  created_at: string
+  updated_at: string
+}
+
 export type Boletin = {
   id: string
   folio: string
@@ -46,6 +56,8 @@ export type Boletin = {
   status: string
   cotizacion_id: number | null
   vendedor_email: string | null
+  conversation_id: string | null
+  conversaciones_bridge: ConversacionBridge[]
   items: BoletinItem[]
   ciudad: string | null
   estado?: string | null
@@ -134,7 +146,7 @@ export const boletinToOrder = (boletin: Boletin): Order => {
   return {
     token: `api19-${emitidoId}`,
     orderId: emitidoId,
-    conversationId: boletin.ticket_id || `api19-${emitidoId}`,
+    conversationId: boletin.conversaciones_bridge[0].conversation_id,
     folio,
     cliente: boletin.contactPerson || boletin.contacto_nombre || boletin.clientName || 'Sin contacto',
     empresa: boletin.clientName || '—',
