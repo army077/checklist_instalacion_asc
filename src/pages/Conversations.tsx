@@ -2,12 +2,16 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useAdminAuth } from '../auth/AdminAuth'
 import {
+  changeConversationStatus,
   getConversationContext,
+  getReplyStatus,
   listConversations,
+  sendHumanMessage,
   updateContact,
   type ConversationDetail,
   type ConversationStatus,
   type ConversationSummary,
+  type ReplyStatus,
 } from '../data/api18'
 
 const STATUS_FOLDERS: { value: ConversationStatus | ''; label: string; icon: string }[] = [
@@ -86,6 +90,14 @@ export default function Conversations() {
   const [savingField, setSavingField] = useState(false)
   const [fieldError, setFieldError] = useState('')
 
+  // Intervención humana (solo conversaciones sobre el número habilitado)
+  const [replyStatus, setReplyStatus] = useState<ReplyStatus | null>(null)
+  const [statusBusy, setStatusBusy] = useState(false)
+  const [statusError, setStatusError] = useState('')
+  const [draft, setDraft] = useState('')
+  const [sendBusy, setSendBusy] = useState(false)
+  const [sendError, setSendError] = useState('')
+
   const threadRef = useRef<HTMLDivElement>(null)
 
   // Se trae siempre el listado completo (solo filtrado por búsqueda) para poder
@@ -140,6 +152,30 @@ export default function Conversations() {
     }
   }, [selectedId])
 
+  // Estado de intervención (habilitada / número elegible / ventana de 24h).
+  useEffect(() => {
+    if (!selectedId) {
+      setReplyStatus(null)
+      return
+    }
+    let cancelled = false
+    const load = async () => {
+      try {
+        const data = await getReplyStatus(selectedId)
+        if (!cancelled) setReplyStatus(data)
+      } catch {
+        // Silencioso: no es crítico para ver el historial, solo para responder.
+        if (!cancelled) setReplyStatus({ enabled: false })
+      }
+    }
+    load()
+    const interval = window.setInterval(load, DETAIL_POLL_MS)
+    return () => {
+      cancelled = true
+      window.clearInterval(interval)
+    }
+  }, [selectedId])
+
   useEffect(() => {
     threadRef.current?.scrollTo({ top: threadRef.current.scrollHeight })
   }, [detail])
@@ -148,6 +184,9 @@ export default function Conversations() {
     setInfoTab('info')
     setEditingField(null)
     setFieldError('')
+    setDraft('')
+    setSendError('')
+    setStatusError('')
   }, [selectedId])
 
   const startEdit = (field: typeof editingField, currentValue: string) => {
@@ -176,6 +215,46 @@ export default function Conversations() {
       setFieldError(error instanceof Error ? error.message : 'No se pudo guardar el cambio.')
     } finally {
       setSavingField(false)
+    }
+  }
+
+  // Marca localmente el nuevo estado (lista + detalle) para feedback inmediato;
+  // el siguiente ciclo de polling confirma contra el servidor.
+  const patchLocalStatus = (conversationId: string, nextStatus: ConversationStatus) => {
+    setConversations((current) => current.map((c) => (c.id === conversationId ? { ...c, status: nextStatus } : c)))
+    setDetail((current) => (current && current.conversation.id === conversationId
+      ? { ...current, conversation: { ...current.conversation, status: nextStatus } }
+      : current))
+  }
+
+  const handleChangeStatus = async (nextStatus: ConversationStatus) => {
+    if (!selectedId) return
+    setStatusBusy(true)
+    setStatusError('')
+    try {
+      const updated = await changeConversationStatus(selectedId, nextStatus)
+      patchLocalStatus(selectedId, updated.status)
+    } catch (error) {
+      setStatusError(error instanceof Error ? error.message : 'No se pudo cambiar el estado.')
+    } finally {
+      setStatusBusy(false)
+    }
+  }
+
+  const handleSend = async (event: React.FormEvent) => {
+    event.preventDefault()
+    if (!selectedId || !draft.trim() || sendBusy) return
+    setSendBusy(true)
+    setSendError('')
+    const body = draft.trim()
+    try {
+      const message = await sendHumanMessage(selectedId, body, crypto.randomUUID())
+      setDetail((current) => (current ? { ...current, messages: [...current.messages, message] } : current))
+      setDraft('')
+    } catch (error) {
+      setSendError(error instanceof Error ? error.message : 'No se pudo enviar el mensaje.')
+    } finally {
+      setSendBusy(false)
     }
   }
 
@@ -370,6 +449,26 @@ export default function Conversations() {
               </div>
             </header>
 
+            {replyStatus?.enabled && selectedSummary.status !== 'closed' && (
+              <div className="cd-status-bar">
+                <span className={`cd-tag ${selectedSummary.status}`}>{STATUS_LABEL[selectedSummary.status]}</span>
+                <div className="cd-status-actions">
+                  <button
+                    className="btn ghost"
+                    type="button"
+                    disabled={statusBusy}
+                    onClick={() => handleChangeStatus(selectedSummary.status === 'human' ? 'open' : 'human')}
+                  >
+                    {selectedSummary.status === 'human' ? 'Liberar' : 'Tomar conversación'}
+                  </button>
+                  <button className="btn ghost" type="button" disabled={statusBusy} onClick={() => handleChangeStatus('closed')}>
+                    Cerrar
+                  </button>
+                </div>
+              </div>
+            )}
+            {statusError && <p className="notice bad" style={{ margin: 12 }}>⚠️ {statusError}</p>}
+
             {detailError && <p className="notice bad" style={{ margin: 12 }}>⚠️ {detailError}</p>}
             {!detailError && detailLoading && !detail && <p className="muted" style={{ margin: 12 }}>Cargando historial…</p>}
 
@@ -391,18 +490,39 @@ export default function Conversations() {
 
             <div className="cd-composer">
               <div className="cd-composer-channel">💬 WhatsApp Business · para: {detail?.contact?.phone ?? selectedSummary.phone}</div>
-              <div className="cd-composer-box">
-                <textarea
-                  rows={1}
-                  placeholder="Vista de solo lectura: responder como agente humano próximamente…"
-                  disabled
-                />
-                <span className="cd-composer-icons">
-                  <span title="Adjuntar">📎</span>
-                  <span title="Emoji">🙂</span>
-                </span>
-                <button className="cd-composer-send" type="button" disabled title="Próximamente">➤</button>
-              </div>
+              {sendError && <p className="notice bad">⚠️ {sendError}</p>}
+              <p className="cd-reply-hint">
+                {selectedSummary.status === 'closed'
+                  ? 'Conversación cerrada. Un nuevo mensaje del cliente abrirá otra.'
+                  : !replyStatus?.enabled
+                    ? 'La intervención humana no está configurada en el servidor.'
+                    : !replyStatus.isEligibleNumber
+                      ? 'Esta conversación no usa el número habilitado para intervención.'
+                      : selectedSummary.status !== 'human'
+                        ? 'Toma la conversación para responder. El bot sigue respondiendo mientras tanto.'
+                        : !replyStatus.canReply
+                          ? 'Ventana de 24 horas cerrada: espera un nuevo mensaje del cliente.'
+                          : 'Respuesta por WhatsApp · Solo texto · Ventana de atención de 24 horas'}
+              </p>
+              <form onSubmit={handleSend}>
+                <div className="cd-composer-box">
+                  <textarea
+                    rows={1}
+                    maxLength={1600}
+                    value={draft}
+                    onChange={(event) => setDraft(event.target.value)}
+                    disabled={sendBusy || !replyStatus?.enabled || !replyStatus.isEligibleNumber || selectedSummary.status !== 'human' || !replyStatus.canReply}
+                    placeholder="Escribe tu respuesta…"
+                  />
+                  <button
+                    type="submit"
+                    className="cd-composer-send enabled"
+                    disabled={sendBusy || !draft.trim() || !replyStatus?.enabled || !replyStatus.isEligibleNumber || selectedSummary.status !== 'human' || !replyStatus.canReply}
+                  >
+                    {sendBusy ? '…' : '➤'}
+                  </button>
+                </div>
+              </form>
             </div>
           </>
         )}

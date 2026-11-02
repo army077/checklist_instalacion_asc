@@ -81,8 +81,13 @@ export type boletinesConversationBridge = {
 }
 
 
-async function request<T>(path: string): Promise<T> {
-  const response = await fetch(`${API18_BASE}${path}`)
+async function request<T>(path: string, options: { method?: 'GET' | 'POST' | 'PATCH'; body?: unknown } = {}): Promise<T> {
+  const { method = 'GET', body } = options
+  const response = await fetch(`${API18_BASE}${path}`, {
+    method,
+    headers: body ? { 'Content-Type': 'application/json' } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
+  })
   const payload = await response.json().catch(() => null)
   if (!response.ok || !payload?.ok) {
     throw new Error(payload?.error || `Error ${response.status} al consultar ${path}`)
@@ -125,3 +130,34 @@ export async function listBoletinesConversationBridge(params: { conversation_id?
   const payload = await request<{ bridges: boletinesConversationBridge[] }>(`/boletines_conversation_bridge?${query.toString()}`)
   return payload.bridges
 }
+
+// ---- Intervención humana (solo conversaciones sobre el número habilitado) ----
+// Ver api_bot_experto/services/humanReplyService.js. Escribe en el mismo
+// esquema que el resto de esta API (no es un canal aislado).
+
+export type ReplyStatus = {
+  enabled: boolean
+  isEligibleNumber?: boolean
+  canReply?: boolean
+}
+
+export async function getReplyStatus(conversationId: string) {
+  return request<ReplyStatus & { ok: true }>(`/conversations/${conversationId}/reply-status`)
+}
+
+export async function changeConversationStatus(conversationId: string, status: ConversationStatus) {
+  const payload = await request<{ conversation: { id: string; status: ConversationStatus } }>(
+    `/conversations/${conversationId}/status`,
+    { method: 'PATCH', body: { status } },
+  )
+  return payload.conversation
+}
+
+export async function sendHumanMessage(conversationId: string, body: string, clientMessageId: string) {
+  const payload = await request<{ duplicate: boolean; message: ConversationMessage }>(
+    `/conversations/${conversationId}/messages`,
+    { method: 'POST', body: { body, clientMessageId } },
+  )
+  return payload.message
+}
+
