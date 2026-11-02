@@ -57,7 +57,7 @@ export type Boletin = {
   cotizacion_id: number | null
   vendedor_email: string | null
   conversation_id: string | null
-  conversaciones_bridge: ConversacionBridge[]
+  conversaciones_bridge?: ConversacionBridge[]
   items: BoletinItem[]
   ciudad: string | null
   estado?: string | null
@@ -124,7 +124,7 @@ const itemDetail = (item: BoletinItem) =>
     .filter((value): value is string => !!value && value.trim().length > 0)
     .join(' · ')
 
-export const boletinToOrder = (boletin: Boletin): Order => {
+export const boletinToOrder = (boletin: Boletin, options: { fallbackConversationId?: string } = {}): Order => {
   const items = boletin.items ?? []
   const maquina = items.find((item) => item.tipo === 'MAQUINA' && item.activo) ?? items[0]
   const accesorios = items.filter((item) => item !== maquina && item.activo)
@@ -143,10 +143,14 @@ export const boletinToOrder = (boletin: Boletin): Order => {
   }
   const folio = boletin.folio || boletin.boletinNumber || boletin.id
   const emitidoId = boletin.boletin_emitido_id || boletin.id
+  const conversationId = boletin.conversaciones_bridge?.[0]?.conversation_id
+    || boletin.conversation_id
+    || options.fallbackConversationId
+    || ''
   return {
     token: `api19-${emitidoId}`,
     orderId: emitidoId,
-    conversationId: boletin.conversaciones_bridge[0].conversation_id,
+    conversationId,
     folio,
     cliente: boletin.contactPerson || boletin.contacto_nombre || boletin.clientName || 'Sin contacto',
     empresa: boletin.clientName || '—',

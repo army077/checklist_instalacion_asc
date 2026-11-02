@@ -4,7 +4,7 @@ import { useAdminAuth } from '../auth/AdminAuth'
 import logo from '../assets/LOGO_ASIAROBOTICA.png'
 import { boletinToOrder, fetchBoletinesEmitidos } from '../data/api19'
 import { LINES, lineById } from '../data/catalog'
-import { fmtSlot, getVars, saveQuestionConfig, saveRegulator, statusOf, upsertApiOrders, useOrder, useOrders, useQuestionConfigs, useSheetSourceStatus, visibleQuestions, type Appointment, type Phase, type ResponseType } from '../data/store'
+import { fmtSlot, getVars, refreshChecklistQuestions, saveQuestionConfig, saveRegulator, statusOf, upsertApiOrders, useChecklistSourceStatus, useOrder, useOrders, useQuestionConfigs, visibleQuestions, type Appointment, type Phase, type ResponseType } from '../data/store'
 
 const LABEL = { incomplete: 'En proceso', ready: 'Listo', issues: 'Con pendientes', blocked: 'Bloqueado' } as const
 
@@ -84,7 +84,7 @@ export function AdminList() {
     fetchBoletinesEmitidos({ page, limit: PAGE_SIZE, search })
       .then((boletines) => {
         if (cancelled) return
-        const mapped = boletines.map(boletinToOrder)
+        const mapped = boletines.map((boletin) => boletinToOrder(boletin))
         upsertApiOrders(mapped)
         setPageTokens(mapped.map((order) => order.token))
         setHasMore(boletines.length === PAGE_SIZE)
@@ -182,6 +182,13 @@ export function AdminDetail() {
   const { logout } = useAdminAuth()
   const { token } = useParams()
   const order = useOrder(token)
+  const checklistSource = useChecklistSourceStatus(order?.token)
+
+  useEffect(() => {
+    if (!order || !order.token.startsWith('api19-')) return
+    void refreshChecklistQuestions(order)
+  }, [order?.token, order?.orderId, order?.conversationId])
+
   if (!order) return <div className="admin"><Link to="/admin">← Volver</Link><p>Pedido no encontrado.</p></div>
   const line = lineById(order.line)
   const vars = getVars(order)
@@ -206,6 +213,8 @@ export function AdminDetail() {
           {Object.entries(vars).map(([key, value]) => <Fragment key={key}><dt>{key}</dt><dd>{value}</dd></Fragment>)}
         </dl>
       </section>
+      {checklistSource.state === 'loading' && <div className="notice info">Sincronizando checklist desde API18…</div>}
+      {checklistSource.state === 'error' && <div className="notice bad">No fue posible cargar checklist desde API18 ({checklistSource.error}).</div>}
       {(['logistics', 'installation'] as const).map((phase) => {
         const questions = visibleQuestions(order, phase)
         const status = phase === 'logistics' ? logistics : installation
@@ -247,12 +256,12 @@ export function AdminConfig() {
   const { logout } = useAdminAuth()
   const orders = useOrders()
   useQuestionConfigs()
-  const sheetSource = useSheetSourceStatus()
   const [role, setRole] = useState<'logistics' | 'engineering'>('logistics')
   const [lineId, setLineId] = useState(orders[0]?.line ?? '')
   const [entry, setEntry] = useState<Record<string, string>>(orders[0]?.entry ?? {})
   const templateOrder = orders.find((item) => item.line === lineId) ?? orders[0]
   const order = templateOrder ? { ...templateOrder, line: lineId, entry } : undefined
+  const checklistSource = useChecklistSourceStatus(order?.token)
   const phase: Phase = role === 'logistics' ? 'logistics' : 'installation'
   const questions = order ? visibleQuestions(order, phase) : []
   const vars = order ? getVars(order) : {}
@@ -269,11 +278,11 @@ export function AdminConfig() {
         <div><h1>Configuración de checklist</h1><small>La edición es una simulación local de permisos por área.</small></div>
         <button className="btn ghost" type="button" onClick={() => { void logout() }}>Cerrar sesión</button>
       </header>
-      {sheetSource.state !== 'disabled' && (
-        <div className={`notice ${sheetSource.state === 'error' ? 'bad' : 'info'}`}>
-          {sheetSource.state === 'loading' && <p>Sincronizando preguntas desde Google Sheets…</p>}
-          {sheetSource.state === 'ready' && <p>Preguntas activas desde Google Sheets: {sheetSource.questionCount} ({sheetSource.mode === 'replace' ? 'reemplaza catálogo base' : 'sumadas al catálogo base'}).</p>}
-          {sheetSource.state === 'error' && <p>No fue posible cargar Google Sheets ({sheetSource.error}). Se usa el catálogo local.</p>}
+      {checklistSource.state !== 'disabled' && (
+        <div className={`notice ${checklistSource.state === 'error' ? 'bad' : 'info'}`}>
+          {checklistSource.state === 'loading' && <p>Sincronizando checklist desde API18…</p>}
+          {checklistSource.state === 'ready' && <p>Preguntas activas desde API18: {checklistSource.questionCount}.</p>}
+          {checklistSource.state === 'error' && <p>No fue posible cargar checklist API18 ({checklistSource.error}). Se usa el catálogo local.</p>}
         </div>
       )}
       <div className="role-switch" aria-label="Área que configura">

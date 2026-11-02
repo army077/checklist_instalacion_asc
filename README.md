@@ -7,29 +7,18 @@ npm install
 npm run dev
 ```
 
-## Preguntas desde Google Sheets
+## Preguntas desde API18
 
-Puedes alimentar preguntas automáticamente desde una hoja publicada como CSV.
+El checklist del cliente y del detalle administrativo ahora se obtiene desde:
 
-1. En Google Sheets, publica la hoja: **Archivo → Compartir → Publicar en la web**.
-2. Copia la URL CSV publicada.
-3. Crea `.env` (o usa tu entorno) con:
-   - `VITE_GOOGLE_SHEETS_CSV_URL=<tu_url_csv_publicada>`
-   - `VITE_GOOGLE_SHEETS_MODE=append` (opcional, por defecto) o `replace`
-4. Reinicia `npm run dev`.
+`GET /api18/checklist/{boletinId}/{conversationId}`
 
-También puedes pegar la URL normal de edición (`.../edit?gid=...`): la app intenta convertirla automáticamente a formato CSV. Aun así, la pestaña debe estar publicada o compartida para lectura pública; si no, Google redirige a login y el navegador bloqueará la petición por CORS.
+Configuración:
 
-Columnas soportadas (nombres flexibles): `ID`, `Compuerta/Fase`, `Control/Pregunta`, `Evidencia o dato/Texto`, `Tipo`, `Opciones`, `Estatus`, `Crítica`, `Línea`.
-También toma metadatos para la vista checklist del cliente: `Captura`, `Valida`, `Si no pasa (por definir)`, `Sustento (encuestas)`, `Responsable de implementar`, `Fecha objetivo`, `Comentarios`.
+1. Define `VITE_API18_URL` en `.env` (por defecto usa `https://desarrollotecnologicoar.com/api18`).
+2. Reinicia `npm run dev`.
 
-- `Compuerta` define la fase (`Antes de la entrega`/logística → logística; instalación/capacitación → instalación).
-- `Tipo` puede indicar respuesta (`texto`, `número`, `selección`) y si contiene `bloqueante` marca la pregunta como crítica.
-- `Opciones` usa separador `|` (ejemplo: `Sí|No|No aplica`).
-- Si `Línea` se deja vacía, aplica a todas las líneas de equipo.
-- En la vista cliente, cada fase se muestra como checklist y cada punto refleja los campos de la fila de Google Sheets.
-- Para la vista cliente, se muestran solo filas donde `Captura` incluye `Cliente` (por ejemplo `Cliente` o `Chofer o cliente`).
-- Si Google Sheets está disponible, la vista cliente prioriza las filas del Sheet (IDs `gs-*`) para que el checklist dependa de esa fuente.
+La app consume esa API por pedido y convierte su respuesta en preguntas del checklist (`api18-*`), reemplazando la fuente de Google Sheets.
 
 Demo: `/admin` (panel interno) y `/c/demo-shoppro` (vista del cliente).
 

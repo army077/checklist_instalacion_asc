@@ -3,7 +3,7 @@ import { useParams } from 'react-router-dom'
 import logo from '../assets/ar_logo.png'
 import { lineById, type Question } from '../data/catalog'
 import { boletinToOrder, fetchBoletinEmitido } from '../data/api19'
-import { compressImage, fmtSlot, getVars, updateOrder, upsertApiOrders, useOrder, useSheetSourceStatus, visibleQuestions, type Order, type Phase } from '../data/store'
+import { compressImage, fmtSlot, getVars, refreshChecklistQuestions, updateOrder, upsertApiOrders, useChecklistSourceStatus, useOrder, visibleQuestions, type Order, type Phase } from '../data/store'
 
 const API_TOKEN_PREFIX = 'api19-'
 
@@ -19,7 +19,7 @@ type ChecklistStatus = {
 }
 
 const isClientFacingQuestion = (question: Question) => question.checklistMeta?.clientFacing !== false
-const isSheetQuestion = (question: Question) => question.id.startsWith('gs-')
+const isApiChecklistQuestion = (question: Question) => question.id.startsWith('api18-')
 const statusFromQuestions = (order: Order, questions: Question[]): ChecklistStatus => {
   const answered = questions.filter((question) => !!order.answers[question.id]?.ans).length
   const unanswered = questions.filter((question) => !order.answers[question.id]?.ans)
@@ -51,7 +51,7 @@ export default function ClientPage() {
   const { token, orderId, conversationId } = useParams()
   const boletinId = orderId ?? (token?.startsWith(API_TOKEN_PREFIX) ? token.slice(API_TOKEN_PREFIX.length) : undefined)
   const order = useOrder(boletinId ? `${API_TOKEN_PREFIX}${boletinId}` : undefined)
-  const sheetSource = useSheetSourceStatus()
+  const checklistSource = useChecklistSourceStatus(order?.token)
   const [load, setLoad] = useState<{ id?: string; error?: string }>({})
   const [view, setView] = useState<View>('home')
   const [phase, setPhase] = useState<Phase>('logistics')
@@ -64,14 +64,19 @@ export default function ClientPage() {
     fetchBoletinEmitido(boletinId)
       .then((boletin) => {
         if (cancelled) return
-        upsertApiOrders([boletinToOrder(boletin)])
+        upsertApiOrders([boletinToOrder(boletin, { fallbackConversationId: conversationId })])
         setLoad({ id: boletinId })
       })
       .catch((error) => {
         if (!cancelled) setLoad({ id: boletinId, error: error instanceof Error ? error.message : 'No se pudo consultar el pedido.' })
       })
     return () => { cancelled = true }
-  }, [boletinId])
+  }, [boletinId, conversationId])
+
+  useEffect(() => {
+    if (!order || !order.token.startsWith(API_TOKEN_PREFIX)) return
+    void refreshChecklistQuestions(order)
+  }, [order?.token, order?.orderId, order?.conversationId])
 
   if (boletinId && load.id !== boletinId) {
     return (
@@ -98,7 +103,7 @@ export default function ClientPage() {
   const allLogisticsQuestions = visibleQuestions(order, 'logistics')
   const allInstallationQuestions = visibleQuestions(order, 'installation')
   const questionsForClient = (questions: Question[]) => {
-    const scoped = sheetSource.state === 'ready' ? questions.filter(isSheetQuestion) : questions
+    const scoped = checklistSource.state === 'ready' ? questions.filter(isApiChecklistQuestion) : questions
     const clientFacing = scoped.filter(isClientFacingQuestion)
     if (clientFacing.length > 0) return clientFacing
     if (scoped.length > 0) return scoped
@@ -128,7 +133,8 @@ export default function ClientPage() {
       <Shell>
         <p className="eyebrow">{line.icon} {line.name} · {order.folio}</p>
         <h1>¡Hola, {order.cliente.split(' ')[0]}!</h1>
-        {sheetSource.state === 'error' && <div className="notice warn">Estamos usando las preguntas base porque no pudimos sincronizar Google Sheets.</div>}
+        {checklistSource.state === 'loading' && <div className="notice info">Sincronizando checklist desde API18…</div>}
+        {checklistSource.state === 'error' && <div className="notice warn">No pudimos sincronizar checklist desde API18 ({checklistSource.error}). Mostramos los requisitos base.</div>}
         <p>Confirma por separado que el sitio está listo para recibir tu equipo y para instalarlo. Puedes agendar la entrega aunque todavía haya preparativos de instalación pendientes.</p>
         <dl className="facts">
           <dt>Empresa</dt><dd>{order.empresa}</dd>
@@ -306,7 +312,7 @@ function ChecklistStep({ order, phase, questions, idx, done, back }: {
     <Shell progress={questions.length ? answered / questions.length : 0}>
       <p className="eyebrow">{phase === 'logistics' ? 'Logística y maniobras' : 'Instalación y capacitación'} · Checklist</p>
       <h1>Checklist de preparación</h1>
-      <p>Marca cada punto según tu avance. Este checklist corresponde a la tabla de Google Sheets.</p>
+      <p>Marca cada punto según tu avance. Este checklist se sincroniza desde API18.</p>
       <div className="notice info">Avance: {answered}/{questions.length} puntos respondidos.</div>
 
       <ul className="checklist">

@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from 'react'
 import { lineById, type Question } from './catalog'
-import { fetchSheetQuestions, type SheetQuestion } from './googleSheets'
+import { fetchChecklistQuestions, type ChecklistQuestion } from './api18Checklist'
 
 export type Phase = 'logistics' | 'installation'
 export type ResponseType = 'yes-no' | 'text' | 'number' | 'choice'
@@ -45,10 +45,8 @@ interface ModelConfig {
 
 const ORDER_KEY = 'asc-orders-v2'
 const CONFIG_KEY = 'asc-question-config-v1'
-const SHEETS_CSV_URL = (import.meta.env.VITE_GOOGLE_SHEETS_CSV_URL as string | undefined)?.trim()
-const SHEETS_MODE = (import.meta.env.VITE_GOOGLE_SHEETS_MODE as string | undefined)?.trim().toLowerCase() === 'replace'
-  ? 'replace'
-  : 'append'
+const CHECKLIST_SOURCE = 'API18 /checklist/{boletinId}/{conversationId}'
+const DISABLED_CHECKLIST_STATUS = { state: 'disabled' as const, questionCount: 0, source: CHECKLIST_SOURCE }
 const conversations = {
   shoppro: '09af8a9fb95a8b091a8c02a3828e589c6408c1d672856',
   fiberx0: '2d14ac7c-1b7f-42c3-9b23-4f3af6201001',
@@ -89,19 +87,13 @@ const readOrders = (): Order[] => {
 
 let orders = readOrders()
 let modelConfigs: Record<string, ModelConfig> = {}
-let sheetQuestions: SheetQuestion[] = []
-let sheetStatus: {
+let checklistQuestionsByToken: Record<string, ChecklistQuestion[]> = {}
+let checklistStatusByToken: Record<string, {
   state: 'disabled' | 'loading' | 'ready' | 'error'
   questionCount: number
-  mode: 'append' | 'replace'
   source?: string
   error?: string
-} = {
-  state: SHEETS_CSV_URL ? 'loading' : 'disabled',
-  questionCount: 0,
-  mode: SHEETS_MODE,
-  source: SHEETS_CSV_URL,
-}
+}> = {}
 try {
   const raw = localStorage.getItem(CONFIG_KEY)
   if (raw) modelConfigs = JSON.parse(raw) as Record<string, ModelConfig>
@@ -133,7 +125,7 @@ const subscribe = (listener: () => void) => {
 const publish = () => listeners.forEach((listener) => listener())
 
 const matchesLine = (line: string | undefined, orderLine: string) => !line || line === orderLine
-const toQuestion = (question: SheetQuestion): Question => ({
+const toQuestion = (question: ChecklistQuestion): Question => ({
   id: question.id,
   title: question.title,
   text: () => question.prompt,
@@ -157,46 +149,64 @@ const toQuestion = (question: SheetQuestion): Question => ({
   },
 })
 
-const sheetQuestionsForOrder = (order: Order): Question[] =>
-  sheetQuestions
+const checklistQuestionsForOrder = (order: Order): Question[] =>
+  (checklistQuestionsByToken[order.token] ?? [])
     .filter((question) => matchesLine(question.line, order.line))
     .map(toQuestion)
 
-export const refreshSheetQuestions = async () => {
-  if (!SHEETS_CSV_URL) return
-  sheetStatus = { ...sheetStatus, state: 'loading', error: undefined }
+const statusForToken = (token?: string) => {
+  if (!token) return DISABLED_CHECKLIST_STATUS
+  return checklistStatusByToken[token] ?? DISABLED_CHECKLIST_STATUS
+}
+
+export const refreshChecklistQuestions = async (order: Order) => {
+  const { token, orderId, conversationId } = order
+  if (!orderId || !conversationId) {
+    checklistQuestionsByToken = { ...checklistQuestionsByToken, [token]: [] }
+    checklistStatusByToken = {
+      ...checklistStatusByToken,
+      [token]: { state: 'disabled', questionCount: 0, source: CHECKLIST_SOURCE },
+    }
+    publish()
+    return
+  }
+  checklistStatusByToken = {
+    ...checklistStatusByToken,
+    [token]: { state: 'loading', questionCount: checklistQuestionsByToken[token]?.length ?? 0, source: CHECKLIST_SOURCE },
+  }
   publish()
   try {
-    const loaded = await fetchSheetQuestions(SHEETS_CSV_URL)
-    sheetQuestions = loaded
-    sheetStatus = {
-      ...sheetStatus,
-      state: 'ready',
-      questionCount: loaded.length,
-      error: undefined,
+    const loaded = await fetchChecklistQuestions(orderId, conversationId)
+    checklistQuestionsByToken = { ...checklistQuestionsByToken, [token]: loaded }
+    checklistStatusByToken = {
+      ...checklistStatusByToken,
+      [token]: {
+        state: 'ready',
+        questionCount: loaded.length,
+        source: CHECKLIST_SOURCE,
+      },
     }
   } catch (error) {
-    sheetQuestions = []
-    sheetStatus = {
-      ...sheetStatus,
-      state: 'error',
-      questionCount: 0,
-      error: error instanceof Error ? error.message : String(error),
+    checklistQuestionsByToken = { ...checklistQuestionsByToken, [token]: [] }
+    checklistStatusByToken = {
+      ...checklistStatusByToken,
+      [token]: {
+        state: 'error',
+        questionCount: 0,
+        source: CHECKLIST_SOURCE,
+        error: error instanceof Error ? error.message : String(error),
+      },
     }
   }
   publish()
 }
 
-if (SHEETS_CSV_URL) {
-  void refreshSheetQuestions()
-}
-
 export const useOrders = () => useSyncExternalStore(subscribe, () => orders)
 export const useQuestionConfigs = () => useSyncExternalStore(subscribe, () => modelConfigs)
-export const useSheetSourceStatus = () => useSyncExternalStore(subscribe, () => sheetStatus)
+export const useChecklistSourceStatus = (token?: string) => useSyncExternalStore(subscribe, () => statusForToken(token))
 export const useOrder = (token?: string) => {
   useSyncExternalStore(subscribe, () => modelConfigs)
-  useSyncExternalStore(subscribe, () => sheetStatus)
+  useSyncExternalStore(subscribe, () => checklistStatusByToken)
   return useOrders().find((order) => order.token === token)
 }
 export const findOrderById = (orderId?: string) => {
@@ -268,10 +278,11 @@ export const visibleQuestions = (order: Order, phase?: Phase): Question[] => {
         critical: override?.critical ?? question.critical,
       }
     })
-  const externalQuestions = sheetQuestionsForOrder(order)
-  const combined = sheetStatus.state === 'ready' && SHEETS_MODE === 'replace'
+  const externalQuestions = checklistQuestionsForOrder(order)
+  const sourceStatus = statusForToken(order.token)
+  const combined = sourceStatus.state === 'ready' && externalQuestions.length > 0
     ? externalQuestions
-    : [...externalQuestions, ...baseQuestions]
+    : baseQuestions
   return combined.filter((question) => !phase || question.phase === phase)
 }
 
