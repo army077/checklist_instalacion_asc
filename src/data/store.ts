@@ -134,6 +134,8 @@ const toQuestion = (question: ChecklistQuestion): Question => ({
   options: question.options,
   critical: question.critical,
   photo: question.photo,
+  apiId: question.apiId,
+  initialAnswer: question.initialAnswer,
   checklistMeta: {
     clientFacing: question.clientFacing,
     gate: question.gate,
@@ -185,6 +187,21 @@ export const refreshChecklistQuestions = async (order: Order) => {
         questionCount: loaded.length,
         source: CHECKLIST_SOURCE,
       },
+    }
+    // Precarga en order.answers lo ya guardado en checklist_asc (columna
+    // "cumplido"), sin pisar respuestas que el usuario ya haya editado en
+    // esta sesión.
+    const seeded = loaded.filter((question) => question.initialAnswer && question.apiId !== undefined)
+    if (seeded.length) {
+      updateOrder(token, (current) => {
+        const answers = { ...current.answers }
+        for (const question of seeded) {
+          if (!answers[question.id]?.ans) {
+            answers[question.id] = { ans: question.initialAnswer! }
+          }
+        }
+        return { ...current, answers }
+      })
     }
   } catch (error) {
     checklistQuestionsByToken = { ...checklistQuestionsByToken, [token]: [] }

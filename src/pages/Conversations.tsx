@@ -4,16 +4,17 @@ import { useAdminAuth } from '../auth/AdminAuth'
 import {
   getConversationContext,
   listConversations,
+  updateContact,
   type ConversationDetail,
   type ConversationStatus,
   type ConversationSummary,
 } from '../data/api18'
 
-const STATUS_FILTERS: { value: ConversationStatus | ''; label: string }[] = [
-  { value: '', label: 'Todas' },
-  { value: 'open', label: 'Bot' },
-  { value: 'human', label: 'Humano' },
-  { value: 'closed', label: 'Cerradas' },
+const STATUS_FOLDERS: { value: ConversationStatus | ''; label: string; icon: string }[] = [
+  { value: '', label: 'Todas', icon: '🗂️' },
+  { value: 'open', label: 'Bot', icon: '🤖' },
+  { value: 'human', label: 'Humano', icon: '🧑' },
+  { value: 'closed', label: 'Cerradas', icon: '✅' },
 ]
 
 const STATUS_LABEL: Record<ConversationStatus, string> = {
@@ -32,8 +33,21 @@ const SENT_BY_LABEL: Record<string, string> = {
 const LIST_POLL_MS = 10_000
 const DETAIL_POLL_MS = 5_000
 
+type InfoTab = 'info' | 'adjuntos' | 'actividades'
+
 function contactName(c: { full_name: string | null; whatsapp_name: string | null; phone: string }) {
   return c.full_name || c.whatsapp_name || c.phone
+}
+
+function initialsOf(name: string) {
+  return (
+    name
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((part) => part[0]?.toUpperCase())
+      .join('') || '#'
+  )
 }
 
 function relativeTime(iso: string | null) {
@@ -66,14 +80,21 @@ export default function Conversations() {
   const [detail, setDetail] = useState<ConversationDetail | null>(null)
   const [detailError, setDetailError] = useState('')
   const [detailLoading, setDetailLoading] = useState(false)
+  const [infoTab, setInfoTab] = useState<InfoTab>('info')
+  const [editingField, setEditingField] = useState<'full_name' | 'company' | 'email' | 'customer_code' | null>(null)
+  const [editDraft, setEditDraft] = useState('')
+  const [savingField, setSavingField] = useState(false)
+  const [fieldError, setFieldError] = useState('')
 
   const threadRef = useRef<HTMLDivElement>(null)
 
+  // Se trae siempre el listado completo (solo filtrado por búsqueda) para poder
+  // mostrar contadores por carpeta/estado; el filtro de estado se aplica en cliente.
   useEffect(() => {
     let cancelled = false
     const load = async () => {
       try {
-        const rows = await listConversations({ status, search })
+        const rows = await listConversations({ search })
         if (cancelled) return
         setConversations(rows)
         setListError('')
@@ -90,7 +111,7 @@ export default function Conversations() {
       cancelled = true
       window.clearInterval(interval)
     }
-  }, [status, search])
+  }, [search])
 
   useEffect(() => {
     if (!selectedId) {
@@ -123,67 +144,164 @@ export default function Conversations() {
     threadRef.current?.scrollTo({ top: threadRef.current.scrollHeight })
   }, [detail])
 
+  useEffect(() => {
+    setInfoTab('info')
+    setEditingField(null)
+    setFieldError('')
+  }, [selectedId])
+
+  const startEdit = (field: typeof editingField, currentValue: string) => {
+    setEditingField(field)
+    setEditDraft(currentValue)
+    setFieldError('')
+  }
+
+  const cancelEdit = () => {
+    setEditingField(null)
+    setFieldError('')
+  }
+
+  const saveEdit = async () => {
+    if (!editingField || !detail?.contact) return
+    const contactId = detail.contact.id
+    const field = editingField
+    const value = editDraft.trim()
+    setSavingField(true)
+    setFieldError('')
+    try {
+      const updated = await updateContact(contactId, { [field]: value || null })
+      setDetail((current) => (current ? { ...current, contact: updated } : current))
+      setEditingField(null)
+    } catch (error) {
+      setFieldError(error instanceof Error ? error.message : 'No se pudo guardar el cambio.')
+    } finally {
+      setSavingField(false)
+    }
+  }
+
+  const folderCounts = useMemo(() => {
+    const counts: Record<string, number> = { '': conversations.length }
+    for (const c of conversations) counts[c.status] = (counts[c.status] ?? 0) + 1
+    return counts
+  }, [conversations])
+
+  const filteredConversations = useMemo(
+    () => (status ? conversations.filter((c) => c.status === status) : conversations),
+    [conversations, status],
+  )
+
   const selectedSummary = useMemo(
     () => conversations.find((c) => c.id === selectedId) ?? null,
     [conversations, selectedId],
   )
 
-  return (
-    <div className="admin conv-page">
-      <header className="admin-head">
-        <div>
-          <h1>Conversaciones</h1>
-          <small>Lectura en vivo del bot de WhatsApp (API18) · próximamente intervención humana</small>
-        </div>
-        <div className="header-actions">
-          <Link className="btn ghost" to="/admin">← Volver al panel</Link>
-          <button className="btn ghost" type="button" onClick={() => { void logout() }}>Cerrar sesión</button>
-        </div>
-      </header>
+  const attachments = useMemo(
+    () => (detail?.messages ?? []).filter((m) => m.media_url),
+    [detail],
+  )
 
-      <p className="demo-note">
-        Vista de solo lectura conectada a la base de datos de persistencia del bot. Por ahora no permite responder como
-        agente humano; esa capacidad se añadirá más adelante.
-      </p>
-
-      <div className="conv-layout">
-        <aside className="conv-list-pane">
-          <div className="conv-filters">
+  const renderEditableField = (
+    field: 'full_name' | 'company' | 'email' | 'customer_code',
+    label: string,
+    value: string | null | undefined,
+    placeholder: string,
+  ) => {
+    const isEditing = editingField === field
+    return (
+      <div className="cd-info-field">
+        <span className="cd-info-field-label">{label}</span>
+        {isEditing ? (
+          <div className="cd-info-field-edit">
             <input
-              className="conv-search"
-              type="search"
-              placeholder="Buscar por nombre o teléfono…"
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
+              autoFocus
+              type={field === 'email' ? 'email' : 'text'}
+              value={editDraft}
+              disabled={savingField}
+              onChange={(event) => setEditDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') void saveEdit()
+                if (event.key === 'Escape') cancelEdit()
+              }}
             />
-            <div className="conv-status-tabs" role="tablist" aria-label="Filtrar por estado">
-              {STATUS_FILTERS.map((filter) => (
-                <button
-                  key={filter.value || 'all'}
-                  className={`conv-tab ${status === filter.value ? 'active' : ''}`}
-                  onClick={() => setStatus(filter.value)}
-                >
-                  {filter.label}
-                </button>
-              ))}
-            </div>
+            <button type="button" className="cd-info-field-btn" disabled={savingField} onClick={() => void saveEdit()}>
+              {savingField ? '…' : '✓'}
+            </button>
+            <button type="button" className="cd-info-field-btn" disabled={savingField} onClick={cancelEdit}>✕</button>
           </div>
+        ) : (
+          <span
+            className={`cd-info-field-value editable ${value ? '' : 'empty'}`}
+            onClick={() => startEdit(field, value ?? '')}
+            title="Clic para editar"
+          >
+            {value || placeholder}
+          </span>
+        )}
+        {isEditing && fieldError && <small className="cd-info-field-error">⚠️ {fieldError}</small>}
+      </div>
+    )
+  }
 
-          {listError && <p className="notice bad">⚠️ {listError}</p>}
-          {!listError && listLoading && conversations.length === 0 && <p className="muted">Cargando conversaciones…</p>}
-          {!listError && !listLoading && conversations.length === 0 && (
-            <p className="muted">No hay conversaciones para este filtro.</p>
+  return (
+    <div className="conv-dark">
+      {/* Rail de navegación principal */}
+      <aside className="cd-rail">
+        <div className="cd-rail-logo">A</div>
+        <button className="cd-rail-btn active" type="button" title="Conversaciones">💬</button>
+        <div className="cd-rail-spacer" />
+        <Link className="cd-rail-btn" to="/admin" title="Volver al panel">🏠</Link>
+        <button className="cd-rail-btn" type="button" title="Cerrar sesión" onClick={() => { void logout() }}>⏻</button>
+      </aside>
+
+      {/* Columna de carpetas / estado */}
+      <aside className="cd-folders">
+        <span className="cd-folders-title">Buzón</span>
+        <div className="cd-folder-group">
+          <span className="cd-folder-group-label">Bandeja</span>
+          {STATUS_FOLDERS.map((folder) => (
+            <button
+              key={folder.value || 'all'}
+              type="button"
+              className={`cd-folder ${status === folder.value ? 'active' : ''}`}
+              onClick={() => setStatus(folder.value)}
+            >
+              <span className="cd-folder-icon">{folder.icon}</span>
+              <span className="cd-folder-label">{folder.label}</span>
+              <span className="cd-folder-count">{folderCounts[folder.value] ?? 0}</span>
+            </button>
+          ))}
+        </div>
+      </aside>
+
+      {/* Lista de chats */}
+      <section className="cd-list">
+        <header className="cd-list-head">
+          <span className="cd-list-head-title">Chats</span>
+          <span className="cd-list-head-icons">
+            <span title="Buscar">🔍</span>
+          </span>
+        </header>
+        <div className="cd-list-search">
+          <input
+            type="search"
+            placeholder="Buscar por nombre o teléfono…"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+          />
+        </div>
+
+        <div className="cd-list-scroll">
+          {listError && <p className="notice bad" style={{ margin: 12 }}>⚠️ {listError}</p>}
+          {!listError && listLoading && conversations.length === 0 && (
+            <p className="muted" style={{ margin: 12 }}>Cargando conversaciones…</p>
+          )}
+          {!listError && !listLoading && filteredConversations.length === 0 && (
+            <p className="muted" style={{ margin: 12 }}>No hay conversaciones para este filtro.</p>
           )}
 
-          <ul className="conv-list">
-            {conversations.map((conversation) => {
+          <ul className="cd-chat-list">
+            {filteredConversations.map((conversation) => {
               const name = contactName(conversation)
-              const initials = name
-                .split(/\s+/)
-                .filter(Boolean)
-                .slice(0, 2)
-                .map((part) => part[0]?.toUpperCase())
-                .join('') || '#'
               const preview = conversation.last_message_body?.trim() || 'Sin mensajes todavía'
               const previewPrefix =
                 conversation.last_message_direction === 'outbound'
@@ -192,19 +310,22 @@ export default function Conversations() {
               return (
                 <li key={conversation.id}>
                   <button
-                    className={`conv-item ${selectedId === conversation.id ? 'active' : ''}`}
+                    type="button"
+                    className={`cd-chat-item ${selectedId === conversation.id ? 'active' : ''}`}
                     onClick={() => setSelectedId(conversation.id)}
                   >
-                    <span className="conv-avatar">{initials}</span>
-                    <span className="conv-item-body">
-                      <span className="conv-item-top">
-                        <b>{name}</b>
-                        <small>{relativeTime(conversation.last_message_at ?? conversation.started_at)}</small>
+                    <span className="cd-chat-avatar-wrap">
+                      <span className="cd-chat-avatar">{initialsOf(name)}</span>
+                      <span className={`cd-chat-dot ${conversation.status}`} />
+                    </span>
+                    <span className="cd-chat-body">
+                      <span className="cd-chat-top">
+                        <span className="cd-chat-name">{name}</span>
+                        <span className="cd-chat-time">{relativeTime(conversation.last_message_at ?? conversation.started_at)}</span>
                       </span>
-                      <span className="conv-item-preview">{previewPrefix}{preview}</span>
-                      <span className="conv-item-bottom">
-                        <span className={`pill conv-status-${conversation.status}`}>{STATUS_LABEL[conversation.status]}</span>
-                        <small>{conversation.message_count} mensaje(s)</small>
+                      <span className="cd-chat-preview">{previewPrefix}{preview}</span>
+                      <span className="cd-chat-bottom">
+                        <span className={`cd-tag ${conversation.status}`}>{STATUS_LABEL[conversation.status]}</span>
                       </span>
                     </span>
                   </button>
@@ -212,50 +333,212 @@ export default function Conversations() {
               )
             })}
           </ul>
-        </aside>
+        </div>
+      </section>
 
-        <section className="conv-thread-pane">
-          {!selectedSummary && (
-            <div className="conv-empty">
+      {/* Hilo de la conversación */}
+      <section className="cd-thread">
+        {!selectedSummary && (
+          <div className="cd-thread-empty">
+            <div className="cd-thread-empty-inner">
+              <span className="cd-thread-empty-icon">💬</span>
               <p>Selecciona una conversación para ver el historial.</p>
+            </div>
+          </div>
+        )}
+
+        {selectedSummary && (
+          <>
+            <header className="cd-thread-head">
+              <div className="cd-thread-head-left">
+                <span className="cd-thread-avatar">{initialsOf(contactName(selectedSummary))}</span>
+                <div className="cd-thread-title">
+                  <b>{contactName(selectedSummary)}</b>
+                  <span className="cd-thread-breadcrumb">
+                    {detail?.contact?.phone ?? selectedSummary.phone}
+                    {detail?.contact?.company ? ` · ${detail.contact.company}` : ''}
+                    <span className={`cd-tag ${selectedSummary.status}`}>{STATUS_LABEL[selectedSummary.status]}</span>
+                  </span>
+                </div>
+              </div>
+              <div className="cd-thread-head-right">
+                <button className="btn-icon" type="button" title="Buscar en la conversación">🔍</button>
+                <button className="btn-icon" type="button" title="Historial">🕑</button>
+                <button className="btn-logout" type="button" onClick={() => { void logout() }}>
+                  ⏻ Cerrar sesión
+                </button>
+              </div>
+            </header>
+
+            {detailError && <p className="notice bad" style={{ margin: 12 }}>⚠️ {detailError}</p>}
+            {!detailError && detailLoading && !detail && <p className="muted" style={{ margin: 12 }}>Cargando historial…</p>}
+
+            <div className="cd-thread-scroll" ref={threadRef}>
+              {detail?.messages.map((message) => (
+                <div
+                  key={message.id}
+                  className={`cd-bubble ${message.direction === 'inbound' ? 'in' : 'out'} sent-${message.sent_by}`}
+                  title={fullTimestamp(message.created_at)}
+                >
+                  {message.direction === 'outbound' && (
+                    <span className="cd-bubble-sender">{SENT_BY_LABEL[message.sent_by] ?? message.sent_by}</span>
+                  )}
+                  <p>{message.body || `(${message.message_type})`}</p>
+                  <span className="cd-bubble-time">{relativeTime(message.created_at)}</span>
+                </div>
+              ))}
+            </div>
+
+            <div className="cd-composer">
+              <div className="cd-composer-channel">💬 WhatsApp Business · para: {detail?.contact?.phone ?? selectedSummary.phone}</div>
+              <div className="cd-composer-box">
+                <textarea
+                  rows={1}
+                  placeholder="Vista de solo lectura: responder como agente humano próximamente…"
+                  disabled
+                />
+                <span className="cd-composer-icons">
+                  <span title="Adjuntar">📎</span>
+                  <span title="Emoji">🙂</span>
+                </span>
+                <button className="cd-composer-send" type="button" disabled title="Próximamente">➤</button>
+              </div>
+            </div>
+          </>
+        )}
+      </section>
+
+      {/* Panel de información de contacto */}
+      <aside className="cd-info">
+        <div className="cd-info-content">
+          {!selectedSummary && (
+            <div className="cd-info-empty">
+              <span className="cd-info-empty-icon">👤</span>
+              <b>Sin selección</b>
+              <span>Elige un chat para ver los datos del contacto.</span>
             </div>
           )}
 
-          {selectedSummary && (
+          {selectedSummary && infoTab === 'info' && (
             <>
-              <header className="conv-thread-head">
+              <div className="cd-info-head">Información de contacto</div>
+              <div className="cd-info-avatar-row">
+                <span className="cd-info-avatar">{initialsOf(contactName(selectedSummary))}</span>
                 <div>
                   <b>{contactName(selectedSummary)}</b>
-                  <small>
-                    {detail?.contact?.phone ?? selectedSummary.phone}
-                    {detail?.contact?.company ? ` · ${detail.contact.company}` : ''}
-                  </small>
+                  <small>{detail?.contact?.id ?? selectedSummary.contact_id}</small>
                 </div>
-                <span className={`pill conv-status-${selectedSummary.status}`}>{STATUS_LABEL[selectedSummary.status]}</span>
-              </header>
+              </div>
 
-              {detailError && <p className="notice bad">⚠️ {detailError}</p>}
-              {!detailError && detailLoading && !detail && <p className="muted">Cargando historial…</p>}
-
-              <div className="conv-thread" ref={threadRef}>
-                {detail?.messages.map((message) => (
-                  <div
-                    key={message.id}
-                    className={`conv-bubble ${message.direction === 'inbound' ? 'in' : 'out'} sent-${message.sent_by}`}
-                    title={fullTimestamp(message.created_at)}
-                  >
-                    {message.direction === 'outbound' && (
-                      <span className="conv-bubble-sender">{SENT_BY_LABEL[message.sent_by] ?? message.sent_by}</span>
-                    )}
-                    <p>{message.body || `(${message.message_type})`}</p>
-                    <span className="conv-bubble-time">{relativeTime(message.created_at)}</span>
-                  </div>
-                ))}
+              <div className="cd-info-field">
+                <span className="cd-info-field-label">Número de teléfono</span>
+                <span className="cd-info-field-value">{detail?.contact?.phone ?? selectedSummary.phone}</span>
+              </div>
+              {renderEditableField('company', 'Empresa', detail?.contact?.company, 'Añadir empresa')}
+              {renderEditableField('email', 'Correo', detail?.contact?.email, 'Añadir correo')}
+              {renderEditableField('customer_code', 'Código de cliente', detail?.contact?.customer_code, 'Sin asignar')}
+              <div className="cd-info-field">
+                <span className="cd-info-field-label">Origen</span>
+                <span className="cd-info-field-value">{detail?.contact?.source ?? '—'}</span>
+              </div>
+              <div className="cd-info-field">
+                <span className="cd-info-field-label">Canal</span>
+                <span className="cd-info-field-value">{selectedSummary.channel}</span>
+              </div>
+              <div className="cd-info-field">
+                <span className="cd-info-field-label">Estado</span>
+                <span className={`cd-tag ${selectedSummary.status}`}>{STATUS_LABEL[selectedSummary.status]}</span>
+              </div>
+              <div className="cd-info-field">
+                <span className="cd-info-field-label">Mensajes</span>
+                <span className="cd-info-field-value">{selectedSummary.message_count}</span>
               </div>
             </>
           )}
-        </section>
-      </div>
+
+          {selectedSummary && infoTab === 'adjuntos' && (
+            <>
+              <div className="cd-info-head">Adjuntos</div>
+              {attachments.length === 0 && (
+                <div className="cd-info-empty">
+                  <span className="cd-info-empty-icon">📎</span>
+                  <b>Aún no hay archivos adjuntos</b>
+                  <span>Los archivos compartidos en esta conversación aparecerán aquí.</span>
+                </div>
+              )}
+              {attachments.map((m) => (
+                <div className="cd-activity-item" key={m.id}>
+                  <div className="cd-activity-item-title">📎 {m.message_type}</div>
+                  <div className="cd-activity-item-desc">
+                    <a href={m.media_url ?? '#'} target="_blank" rel="noreferrer" style={{ color: 'var(--cd-accent)' }}>
+                      {m.media_url}
+                    </a>
+                  </div>
+                  <div className="cd-activity-item-time">{fullTimestamp(m.created_at)}</div>
+                </div>
+              ))}
+            </>
+          )}
+
+          {selectedSummary && infoTab === 'actividades' && (
+            <>
+              <div className="cd-info-head">Actividades</div>
+              <div className="cd-activity-item">
+                <div className="cd-activity-item-title">💬 Conversación iniciada</div>
+                <div className="cd-activity-item-desc">Canal: {selectedSummary.channel}</div>
+                <div className="cd-activity-item-time">{fullTimestamp(selectedSummary.started_at)}</div>
+              </div>
+              {selectedSummary.assigned_to && (
+                <div className="cd-activity-item">
+                  <div className="cd-activity-item-title">👤 Asignado</div>
+                  <div className="cd-activity-item-desc">Asignado a {selectedSummary.assigned_to}</div>
+                </div>
+              )}
+              {selectedSummary.last_message_at && (
+                <div className="cd-activity-item">
+                  <div className="cd-activity-item-title">🕑 Último mensaje</div>
+                  <div className="cd-activity-item-time">{fullTimestamp(selectedSummary.last_message_at)}</div>
+                </div>
+              )}
+              {selectedSummary.closed_at && (
+                <div className="cd-activity-item">
+                  <div className="cd-activity-item-title">✅ Conversación cerrada</div>
+                  <div className="cd-activity-item-time">{fullTimestamp(selectedSummary.closed_at)}</div>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+
+        {selectedSummary && (
+          <div className="cd-info-rail">
+            <button
+              className={`cd-info-tab ${infoTab === 'info' ? 'active' : ''}`}
+              type="button"
+              title="Información de contacto"
+              onClick={() => setInfoTab('info')}
+            >
+              👤
+            </button>
+            <button
+              className={`cd-info-tab ${infoTab === 'adjuntos' ? 'active' : ''}`}
+              type="button"
+              title="Adjuntos"
+              onClick={() => setInfoTab('adjuntos')}
+            >
+              📎
+            </button>
+            <button
+              className={`cd-info-tab ${infoTab === 'actividades' ? 'active' : ''}`}
+              type="button"
+              title="Actividades"
+              onClick={() => setInfoTab('actividades')}
+            >
+              🕑
+            </button>
+          </div>
+        )}
+      </aside>
     </div>
   )
 }

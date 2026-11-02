@@ -3,6 +3,7 @@ import { useParams } from 'react-router-dom'
 import logo from '../assets/ar_logo.png'
 import { lineById, type Question } from '../data/catalog'
 import { boletinToOrder, fetchBoletinEmitido } from '../data/api19'
+import { saveChecklistAnswer } from '../data/api18Checklist'
 import { compressImage, fmtSlot, getVars, refreshChecklistQuestions, updateOrder, upsertApiOrders, useChecklistSourceStatus, useOrder, visibleQuestions, type Order, type Phase } from '../data/store'
 
 const API_TOKEN_PREFIX = 'api19-'
@@ -270,6 +271,7 @@ function ChecklistStep({ order, phase, questions, idx, done, back }: {
   const vars = getVars(order)
   const [busyById, setBusyById] = useState<Record<string, boolean>>({})
   const [photoErrorById, setPhotoErrorById] = useState<Record<string, string>>({})
+  const [saveErrorById, setSaveErrorById] = useState<Record<string, string>>({})
   const answered = questions.filter((question) => !!order.answers[question.id]?.ans).length
 
   useEffect(() => {
@@ -281,6 +283,22 @@ function ChecklistStep({ order, phase, questions, idx, done, back }: {
 
   const setAnswer = (questionId: string, value: string) =>
     updateOrder(order.token, (current) => ({ ...current, answers: { ...current.answers, [questionId]: { ...current.answers[questionId], ans: value } } }))
+
+  // Marca el checkbox localmente de inmediato (responsivo) y, si la pregunta
+  // viene de API18 (tiene apiId), persiste el valor en checklist_asc.
+  const toggleYesNo = (question: Question, checked: boolean) => {
+    const value = checked ? 'si' : 'no'
+    setAnswer(question.id, value)
+    setSaveErrorById((current) => ({ ...current, [question.id]: '' }))
+    if (question.apiId !== undefined) {
+      saveChecklistAnswer(question.apiId, checked ? 'Sí' : 'No').catch((error) => {
+        setSaveErrorById((current) => ({
+          ...current,
+          [question.id]: error instanceof Error ? error.message : 'No se pudo guardar en el servidor.',
+        }))
+      })
+    }
+  }
 
   const onFile = async (questionId: string, file?: File) => {
     if (!file) return
@@ -316,7 +334,7 @@ function ChecklistStep({ order, phase, questions, idx, done, back }: {
       <div className="notice info">Avance: {answered}/{questions.length} puntos respondidos.</div>
 
       <ul className="checklist">
-        {questions.map((question, index) => {
+        {questions.map((question) => {
           const answer = order.answers[question.id]
           const responseType = question.responseType ?? 'yes-no'
           const responseOptions = question.options ?? []
@@ -325,67 +343,64 @@ function ChecklistStep({ order, phase, questions, idx, done, back }: {
           const meta = question.checklistMeta
 
           return (
-            <li key={question.id} id={`check-${question.id}`} className={`check-item ${answer?.ans ? 'answered' : 'pending'}`}>
-              <p className="eyebrow">Punto {index + 1}{meta?.gate ? ` · ${meta.gate}` : ''}</p>
-              <h2>{question.title}</h2>
-              <p className="qtext">{question.text(vars, order.entry)}</p>
-              {question.bullets && <ul className="bullets">{question.bullets.map((bullet) => <li key={bullet}>{bullet}</li>)}</ul>}
-              {question.why && <p className="why">💡 {question.why}</p>}
+            <li key={question.id} id={`check-${question.id}`} className={`check-item ${answer?.ans === 'si' ? 'answered' : 'pending'}`}>
+              <div className="check-row-main">
+                {responseType === 'yes-no' ? (
+                  <input
+                    type="checkbox"
+                    className="check-box-native"
+                    checked={answer?.ans === 'si'}
+                    onChange={(event) => toggleYesNo(question, event.target.checked)}
+                  />
+                ) : (
+                  <span className={`dot-placeholder ${answer?.ans ? 'done' : ''}`} aria-hidden>{answer?.ans ? '✓' : ''}</span>
+                )}
+                <div className="check-row-copy">
+                  <p className="check-row-text" onClick={() => responseType === 'yes-no' && toggleYesNo(question, answer?.ans !== 'si')}>
+                    <b>{question.title}{meta?.gate ? ` (${meta.gate})` : ''}.</b> {question.text(vars, order.entry)}
+                  </p>
+                  {question.bullets && (
+                    <ul className="check-bullets">{question.bullets.map((bullet) => <li key={bullet}>{bullet}</li>)}</ul>
+                  )}
+                  {question.why && <p className="check-why">💡 {question.why}</p>}
 
-              {/* {(meta?.capture || meta?.validate || meta?.status || meta?.targetDate) && (
-                <dl className="check-meta">
-                  {meta.capture && <><dt>Captura</dt><dd>{meta.capture}</dd></>}
-                  {meta.validate && <><dt>Valida</dt><dd>{meta.validate}</dd></>}
-                  {meta.status && <><dt>Estatus</dt><dd>{meta.status}</dd></>}
-                  {meta.targetDate && <><dt>Fecha objetivo</dt><dd>{meta.targetDate}</dd></>}
-                </dl>
-              )} */}
+                  {responseType === 'choice' ? (
+                    <div className="check-actions">
+                      {responseOptions.map((option) => (
+                        <button key={option} className={`pill-btn ${answer?.ans === option ? 'sel' : ''}`} onClick={() => setAnswer(question.id, option)}>{option}</button>
+                      ))}
+                    </div>
+                  ) : responseType === 'number' || responseType === 'text' ? (
+                    <label className="response-field">
+                      {responseType === 'number' ? 'Respuesta numérica' : 'Respuesta'}
+                      <input type={responseType === 'number' ? 'number' : 'text'} value={answer?.ans ?? ''} onChange={(event) => setAnswer(question.id, event.target.value)} />
+                    </label>
+                  ) : null}
 
-              {responseType === 'yes-no' ? (
-                <div className="choices">
-                  <button className={`choice yes ${answer?.ans === 'si' ? 'sel' : ''}`} onClick={() => setAnswer(question.id, 'si')}>Sí, ya lo tengo</button>
-                  <button className={`choice no ${answer?.ans === 'no' ? 'sel' : ''}`} onClick={() => setAnswer(question.id, 'no')}>Todavía no</button>
+                  {responseType === 'yes-no' && answer?.ans !== 'si' && (
+                    <p className={`check-note ${question.critical ? 'bad' : 'todo'}`}>
+                      {question.critical ? 'Punto crítico: márcalo cuando esté listo.' : 'Aún no se ha marcado este punto.'}
+                      {meta?.noPass && <> Acción si no pasa: {meta.noPass}</>}
+                    </p>
+                  )}
+                  {saveErrorById[question.id] && (
+                    <p className="check-note bad" role="alert">⚠️ {saveErrorById[question.id]}</p>
+                  )}
+
+                  {question.photo && (
+                    <div className="check-photo-row">
+                      {answer?.photo && <img className="check-photo-thumb" src={answer.photo} alt="Evidencia" />}
+                      <label className="pill-btn">
+                        📷 {answer?.photo ? 'Cambiar foto' : 'Subir foto'}
+                        <input type="file" accept="image/*" capture="environment" hidden onChange={(event) => onFile(question.id, event.target.files?.[0])} />
+                      </label>
+                      {needsPhoto && <small>Falta la foto obligatoria.</small>}
+                      {busy && <small>Procesando imagen…</small>}
+                      {photoErrorById[question.id] && <small role="alert">{photoErrorById[question.id]}</small>}
+                    </div>
+                  )}
                 </div>
-              ) : responseType === 'choice' ? (
-                <div className="choices response-options">
-                  {responseOptions.map((option) => (
-                    <button key={option} className={`choice ${answer?.ans === option ? 'sel' : ''}`} onClick={() => setAnswer(question.id, option)}>{option}</button>
-                  ))}
-                </div>
-              ) : (
-                <label className="response-field">
-                  {responseType === 'number' ? 'Respuesta numérica' : 'Respuesta'}
-                  <input type={responseType === 'number' ? 'number' : 'text'} value={answer?.ans ?? ''} onChange={(event) => setAnswer(question.id, event.target.value)} />
-                </label>
-              )}
-
-              {answer?.ans === 'no' && (
-                <div className={`notice ${question.critical ? 'bad' : 'warn'}`}>
-                  {question.critical ? 'Este punto es crítico para esta fase.' : 'Lo anotamos como pendiente para dar seguimiento.'}
-                  {meta?.noPass && <> Acción si no pasa: {meta.noPass}</>}
-                </div>
-              )}
-
-              {question.photo && answer?.ans && answer.ans !== 'no' && (
-                <div className="photo">
-                  {answer.photo && <img src={answer.photo} alt="Evidencia" />}
-                  <label className="btn ghost">
-                    📷 {answer.photo ? 'Cambiar foto' : question.photo === 'required' ? 'Tomar o subir foto (obligatoria)' : 'Agregar foto (opcional)'}
-                    <input type="file" accept="image/*" capture="environment" hidden onChange={(event) => onFile(question.id, event.target.files?.[0])} />
-                  </label>
-                  {needsPhoto && <small>Necesitamos la foto para validar este punto.</small>}
-                  {busy && <small>Procesando imagen…</small>}
-                  {photoErrorById[question.id] && <small role="alert">{photoErrorById[question.id]}</small>}
-                </div>
-              )}
-
-              {/* {(meta?.support || meta?.responsible || meta?.comments) && (
-                <p className="muted">
-                  {meta.support && <>Sustento: {meta.support}. </>}
-                  {meta.responsible && <>Responsable: {meta.responsible}. </>}
-                  {meta.comments && <>Comentarios: {meta.comments}.</>}
-                </p>
-              )} */}
+              </div>
             </li>
           )
         })}

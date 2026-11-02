@@ -16,6 +16,7 @@ type ApiChecklistPayload = {
   fuente?: string
   conversation_id?: string
   boletin_id?: number | string
+  cumplido?: string
 }
 
 type ApiChecklistResponse = {
@@ -45,6 +46,8 @@ export interface ChecklistQuestion {
   responsible?: string
   targetDate?: string
   comments?: string
+  apiId?: number
+  initialAnswer?: 'si' | 'no'
 }
 
 const normalize = (value: string) =>
@@ -86,6 +89,13 @@ const parseLine = (raw: string): string | undefined => {
   return undefined
 }
 
+const parseInitialAnswer = (raw?: string): 'si' | 'no' | undefined => {
+  const value = normalize(raw ?? '')
+  if (value === 'si') return 'si'
+  if (value === 'no') return 'no'
+  return undefined
+}
+
 const toQuestion = (row: ApiChecklistPayload, index: number): ChecklistQuestion => {
   const title = row.categoria?.trim() || row.id_pregunta?.trim() || `Punto ${index + 1}`
   const prompt = row.requisito?.trim() || row.criterio?.trim() || title
@@ -113,6 +123,8 @@ const toQuestion = (row: ApiChecklistPayload, index: number): ChecklistQuestion 
     responsible: undefined,
     targetDate: undefined,
     comments: undefined,
+    apiId: typeof row.id === 'number' ? row.id : undefined,
+    initialAnswer: parseInitialAnswer(row.cumplido),
   }
 }
 
@@ -129,3 +141,19 @@ export async function fetchChecklistQuestions(boletinId: string, conversationId:
   const rows = Array.isArray(payload?.data) ? payload.data as ApiChecklistPayload[] : []
   return rows.map(toQuestion)
 }
+
+// Persiste la respuesta del cliente (checkbox del checklist) en checklist_asc.
+// Solo aplica a preguntas sí/no que vienen de la API18 (tienen apiId).
+export async function saveChecklistAnswer(apiId: number, cumplido: 'Sí' | 'No'): Promise<void> {
+  const endpoint = `${API18_BASE}/checklist/respuesta/${encodeURIComponent(apiId)}`
+  const response = await fetch(endpoint, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ cumplido }),
+  })
+  const payload = await response.json().catch(() => null) as ApiChecklistResponse | null
+  if (!response.ok || (payload && payload.success === false)) {
+    throw new Error(payload?.error || `No se pudo guardar la respuesta (HTTP ${response.status}).`)
+  }
+}
+

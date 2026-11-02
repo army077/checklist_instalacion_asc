@@ -104,6 +104,21 @@ export async function getConversationContext(conversationId: string) {
   return payload
 }
 
+export type ContactEditableFields = Partial<Pick<ConversationContact, 'full_name' | 'email' | 'company' | 'customer_code'>>
+
+export async function updateContact(contactId: string, patch: ContactEditableFields) {
+  const response = await fetch(`${API18_BASE}/contacts/id/${encodeURIComponent(contactId)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  })
+  const payload = await response.json().catch(() => null)
+  if (!response.ok || !payload?.ok) {
+    throw new Error(payload?.error || `Error ${response.status} al actualizar el contacto`)
+  }
+  return payload.contact as ConversationContact
+}
+
 export async function listBoletinesConversationBridge(params: { conversation_id?: string } = {}) {
   const query = new URLSearchParams()
   if (params.conversation_id) query.set('conversation_id', params.conversation_id)

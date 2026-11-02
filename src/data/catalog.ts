@@ -18,6 +18,8 @@ export interface Question {
   photo?: 'required' | 'optional'
   critical?: boolean
   when?: (e: Entry) => boolean
+  apiId?: number
+  initialAnswer?: 'si' | 'no'
   checklistMeta?: {
     clientFacing?: boolean
     gate?: string
