@@ -12,7 +12,16 @@ import {
   type ConversationStatus,
   type ConversationSummary,
   type ReplyStatus,
+  sendTemplateMessage,
 } from '../data/api18'
+import {
+  buildChecklistMessage,
+  previewReopenTemplateMessage,
+  buildReopenTemplateVariables,
+  resolveChecklistAvailability,
+  REOPEN_WINDOW_TEMPLATE_SID,
+  type ChecklistAvailability,
+} from '../data/checklistSend'
 
 const STATUS_FOLDERS: { value: ConversationStatus | ''; label: string; icon: string }[] = [
   { value: '', label: 'Todas', icon: '🗂️' },
@@ -97,6 +106,20 @@ export default function Conversations() {
   const [draft, setDraft] = useState('')
   const [sendBusy, setSendBusy] = useState(false)
   const [sendError, setSendError] = useState('')
+
+  // Plantilla aprobada por Meta para reabrir la ventana de 24h cuando ya
+  // está cerrada (ver sendTemplateMessage / whatsappTemplates.js).
+  const [templateSending, setTemplateSending] = useState(false)
+  const [templateError, setTemplateError] = useState('')
+
+  // «Enviar checklist»: disponibilidad (boletín + responsable definitivo +
+  // preguntas generadas en checklist_asc) y estado del modal de vista previa.
+  const [checklistInfo, setChecklistInfo] = useState<ChecklistAvailability | null>(null)
+  const [checklistLoading, setChecklistLoading] = useState(false)
+  const [checklistModalOpen, setChecklistModalOpen] = useState(false)
+  const [checklistReplyStatus, setChecklistReplyStatus] = useState<ReplyStatus | null>(null)
+  const [checklistSending, setChecklistSending] = useState(false)
+  const [checklistError, setChecklistError] = useState('')
 
   const threadRef = useRef<HTMLDivElement>(null)
 
@@ -187,7 +210,58 @@ export default function Conversations() {
     setDraft('')
     setSendError('')
     setStatusError('')
+    setTemplateError('')
+    setChecklistModalOpen(false)
+    setChecklistError('')
+    setChecklistReplyStatus(null)
   }, [selectedId])
+
+  // Disponibilidad del checklist para la conversación seleccionada: boletín
+  // vinculado, responsable definitivo (incluye referencias a un contacto
+  // alternativo) y preguntas ya generadas en checklist_asc.
+  useEffect(() => {
+    if (!selectedId) {
+      setChecklistInfo(null)
+      return
+    }
+    let cancelled = false
+    setChecklistLoading(true)
+    resolveChecklistAvailability(selectedId)
+      .then((info) => {
+        if (!cancelled) setChecklistInfo(info)
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setChecklistInfo({
+            available: false,
+            reason: error instanceof Error ? error.message : 'No se pudo verificar el checklist.',
+          })
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setChecklistLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [selectedId])
+
+  // Ventana de 24h / elegibilidad del número para la conversación destino
+  // (puede ser distinta de la seleccionada si hubo un responsable alternativo).
+  useEffect(() => {
+    if (!checklistModalOpen || !checklistInfo?.targetConversationId) return
+    let cancelled = false
+    getReplyStatus(checklistInfo.targetConversationId)
+      .then((data) => {
+        if (!cancelled) setChecklistReplyStatus(data)
+      })
+      .catch(() => {
+        if (!cancelled) setChecklistReplyStatus({ enabled: false })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [checklistModalOpen, checklistInfo?.targetConversationId])
 
   const startEdit = (field: typeof editingField, currentValue: string) => {
     setEditingField(field)
@@ -255,6 +329,48 @@ export default function Conversations() {
       setSendError(error instanceof Error ? error.message : 'No se pudo enviar el mensaje.')
     } finally {
       setSendBusy(false)
+    }
+  }
+
+  const handleSendChecklist = async () => {
+    if (checklistSending) return // evita clics duplicados mientras hay un envío en curso
+    if (!checklistInfo?.available || !checklistInfo.checklistUrl || !checklistInfo.targetConversationId) return
+    setChecklistSending(true)
+    setChecklistError('')
+    try {
+      const message = await sendHumanMessage(
+        checklistInfo.targetConversationId,
+        buildChecklistMessage(checklistInfo.checklistUrl),
+        crypto.randomUUID(),
+      )
+      if (checklistInfo.targetConversationId === selectedId) {
+        setDetail((current) => (current ? { ...current, messages: [...current.messages, message] } : current))
+      }
+      setChecklistModalOpen(false)
+    } catch (error) {
+      setChecklistError(error instanceof Error ? error.message : 'No se pudo enviar el checklist.')
+    } finally {
+      setChecklistSending(false)
+    }
+  }
+
+  const handleSendReopenTemplate = async () => {
+    if (!selectedId || templateSending) return // evita clics duplicados
+    const name = selectedSummary ? contactName(selectedSummary) : 'cliente'
+    setTemplateSending(true)
+    setTemplateError('')
+    try {
+      const message = await sendTemplateMessage(
+        selectedId,
+        REOPEN_WINDOW_TEMPLATE_SID,
+        buildReopenTemplateVariables(name),
+        crypto.randomUUID(),
+      )
+      setDetail((current) => (current ? { ...current, messages: [...current.messages, message] } : current))
+    } catch (error) {
+      setTemplateError(error instanceof Error ? error.message : 'No se pudo enviar la plantilla.')
+    } finally {
+      setTemplateSending(false)
     }
   }
 
@@ -441,6 +557,19 @@ export default function Conversations() {
                 </div>
               </div>
               <div className="cd-thread-head-right">
+                <button
+                  className="btn ghost checklist-send-btn"
+                  type="button"
+                  disabled={checklistLoading || !checklistInfo?.available}
+                  title={checklistLoading
+                    ? 'Verificando checklist…'
+                    : checklistInfo?.available
+                      ? 'Enviar el checklist de instalación por WhatsApp'
+                      : checklistInfo?.reason || 'Checklist no disponible para esta conversación'}
+                  onClick={() => setChecklistModalOpen(true)}
+                >
+                  📋 Enviar checklist
+                </button>
                 <button className="btn-icon" type="button" title="Buscar en la conversación">🔍</button>
                 <button className="btn-icon" type="button" title="Historial">🕑</button>
                 <button className="btn-logout" type="button" onClick={() => { void logout() }}>
@@ -504,6 +633,20 @@ export default function Conversations() {
                           ? 'Ventana de 24 horas cerrada: espera un nuevo mensaje del cliente.'
                           : 'Respuesta por WhatsApp · Solo texto · Ventana de atención de 24 horas'}
               </p>
+              {replyStatus?.enabled && replyStatus.isEligibleNumber && selectedSummary.status === 'human' && !replyStatus.canReply && (
+                <div className="cd-reopen-template">
+                  {templateError && <p className="notice bad">⚠️ {templateError}</p>}
+                  <button
+                    type="button"
+                    className="btn ghost"
+                    disabled={templateSending}
+                    onClick={() => void handleSendReopenTemplate()}
+                    title={previewReopenTemplateMessage(contactName(selectedSummary))}
+                  >
+                    {templateSending ? 'Enviando…' : '👋 Enviar plantilla de reapertura (Meta)'}
+                  </button>
+                </div>
+              )}
               <form onSubmit={handleSend}>
                 <div className="cd-composer-box">
                   <textarea
@@ -659,6 +802,44 @@ export default function Conversations() {
           </div>
         )}
       </aside>
+
+      {checklistModalOpen && checklistInfo?.available && checklistInfo.checklistUrl && (
+        <div className="checklist-modal-overlay" role="dialog" aria-modal="true">
+          <div className="checklist-modal">
+            <h3>Enviar checklist de instalación</h3>
+            <p className="checklist-modal-sub">
+              Se enviará por WhatsApp al responsable confirmado
+              {checklistInfo.targetConversationId !== selectedId ? ' (contacto alternativo, en otra conversación)' : ''}.
+            </p>
+            <pre className="checklist-modal-preview">{buildChecklistMessage(checklistInfo.checklistUrl)}</pre>
+            {checklistReplyStatus && checklistReplyStatus.enabled && !checklistReplyStatus.canReply && (
+              <p className="notice bad">
+                ⚠️ Fuera de la ventana de 24 horas de WhatsApp. El backend aún no soporta plantillas
+                (ContentSid/ContentVariables) para este caso; el envío de texto libre será rechazado.
+              </p>
+            )}
+            {checklistError && <p className="notice bad">⚠️ {checklistError}</p>}
+            <div className="checklist-modal-actions">
+              <button
+                type="button"
+                className="btn ghost"
+                disabled={checklistSending}
+                onClick={() => setChecklistModalOpen(false)}
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                className="btn ghost checklist-send-btn"
+                disabled={checklistSending}
+                onClick={() => void handleSendChecklist()}
+              >
+                {checklistSending ? 'Enviando…' : 'Enviar por WhatsApp'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

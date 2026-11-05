@@ -161,3 +161,63 @@ export async function sendHumanMessage(conversationId: string, body: string, cli
   return payload.message
 }
 
+// Plantilla de WhatsApp aprobada por Meta (Twilio Content API), autorizada
+// para reabrir una conversación fuera de la ventana de 24 horas. El backend
+// valida este mismo ContentSid contra su lista blanca
+// (api_bot_experto/services/whatsappTemplates.js); no usar otro ContentSid.
+export async function sendTemplateMessage(
+  conversationId: string,
+  templateSid: string,
+  templateVariables: Record<string, string>,
+  clientMessageId: string,
+) {
+  const payload = await request<{ duplicate: boolean; message: ConversationMessage }>(
+    `/conversations/${conversationId}/messages`,
+    { method: 'POST', body: { templateSid, templateVariables, clientMessageId } },
+  )
+  return payload.message
+}
+
+// ---- Checklist de instalación: vínculo boletín ↔ conversación y responsables ----
+// Ver api_bot_experto/routes/bridge.js y routes/responsableReferrals.js.
+
+export type ConversationBoletinBridge = {
+  id: string
+  conversation_id: string
+  boletin_id: string
+  es_principal: boolean
+  estado_proceso: string
+  created_at: string
+  updated_at: string
+}
+
+export async function getConversationBoletines(conversationId: string) {
+  const payload = await request<{ data: ConversationBoletinBridge[] }>(`/bridge/conversations/${conversationId}/boletines`)
+  return payload.data
+}
+
+export type ResponsableReferralRole = {
+  role: 'origin' | 'referred' | 'direct'
+  referralId: string | null
+  referralStatus: string | null
+}
+
+export async function getResponsableReferralRole(bridgeId: string) {
+  return request<ResponsableReferralRole & { ok: true }>(`/bridge/${bridgeId}/responsable-referral-role`)
+}
+
+export type ResponsableReferral = {
+  id: string
+  boletin_id: string
+  origin_bridge_id: string
+  origin_conversation_id: string
+  referred_conversation_id: string | null
+  phone: string
+  status: string
+}
+
+export async function getResponsableReferral(id: string) {
+  const payload = await request<{ referral: ResponsableReferral }>(`/responsable-referrals/${id}`)
+  return payload.referral
+}
+
