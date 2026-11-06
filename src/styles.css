@@ -73,7 +73,11 @@
   .check-note.warn { @apply text-amber-700; }
   .check-note.todo { @apply font-normal text-neutral-500; }
   .check-photo-row { @apply mt-2 flex flex-wrap items-center gap-2; }
-  .check-photo-thumb { @apply h-12 w-12 rounded border border-line object-cover; }
+  .check-photo-thumb { @apply h-12 w-12 cursor-pointer rounded border border-line object-cover; }
+  .photo-modal-overlay { @apply fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4; }
+  .photo-modal { @apply relative max-h-[90vh] max-w-[90vw]; }
+  .photo-modal-img { @apply max-h-[90vh] max-w-[90vw] rounded-lg object-contain shadow-2xl; }
+  .photo-modal-close { @apply absolute -right-3 -top-3 grid size-8 place-items-center rounded-full border border-line bg-white text-sm font-bold shadow; }
   .check-box-native { @apply mt-0.5 size-5 shrink-0 cursor-pointer accent-ok; }
   .dot-placeholder { @apply mt-0.5 grid size-5 shrink-0 place-items-center rounded-full border-2 border-line text-[11px] font-bold leading-none text-transparent; }
   .dot-placeholder.done { @apply border-ok bg-ok text-white; }

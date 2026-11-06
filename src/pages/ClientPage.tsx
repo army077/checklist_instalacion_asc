@@ -4,6 +4,7 @@ import logo from '../assets/ar_logo.png'
 import { lineById, type Question } from '../data/catalog'
 import { boletinToOrder, fetchBoletinEmitido } from '../data/api19'
 import { saveChecklistAnswer } from '../data/api18Checklist'
+import { dataUrlToBlob, driveThumbnailUrl, listChecklistPhotos, uploadChecklistPhoto } from '../data/checklistPhotos'
 import { compressImage, fmtSlot, getVars, refreshChecklistQuestions, updateOrder, upsertApiOrders, useChecklistSourceStatus, useOrder, visibleQuestions, type Order, type Phase } from '../data/store'
 
 const API_TOKEN_PREFIX = 'api19-'
@@ -272,7 +273,36 @@ function ChecklistStep({ order, phase, questions, idx, done, back }: {
   const [busyById, setBusyById] = useState<Record<string, boolean>>({})
   const [photoErrorById, setPhotoErrorById] = useState<Record<string, string>>({})
   const [saveErrorById, setSaveErrorById] = useState<Record<string, string>>({})
+  const [previewPhoto, setPreviewPhoto] = useState<string | null>(null)
   const answered = questions.filter((question) => !!order.answers[question.id]?.ans).length
+
+  // Restaura fotos subidas en sesiones/dispositivos previos: el historial
+  // vive en el backend (checklist_photos), no solo en localStorage.
+  useEffect(() => {
+    let cancelled = false
+    listChecklistPhotos(order.conversationId)
+      .then((photos) => {
+        if (cancelled || photos.length === 0) return
+        updateOrder(order.token, (current) => {
+          const answers = { ...current.answers }
+          for (const photo of photos) {
+            const questionId = photo.titulo_instalacion
+            if (!questionId || answers[questionId]?.photo) continue
+            const url = driveThumbnailUrl(photo.drive_file_id)
+            if (!url) continue
+            answers[questionId] = { ...answers[questionId], ans: answers[questionId]?.ans ?? '', photo: url }
+          }
+          return { ...current, answers }
+        })
+      })
+      .catch(() => {
+        // Silencioso: si no se puede consultar el historial remoto, el
+        // usuario sigue pudiendo responder y subir fotos nuevas.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [order.conversationId, order.token])
 
   useEffect(() => {
     const targetId = questions[idx]?.id
@@ -305,8 +335,24 @@ function ChecklistStep({ order, phase, questions, idx, done, back }: {
     setBusyById((current) => ({ ...current, [questionId]: true }))
     setPhotoErrorById((current) => ({ ...current, [questionId]: '' }))
     try {
-      const photo = await compressImage(file)
-      updateOrder(order.token, (current) => ({ ...current, answers: { ...current.answers, [questionId]: { ...current.answers[questionId], ans: current.answers[questionId]?.ans ?? '', photo } } }))
+      const compressed = await compressImage(file)
+      // Vista previa inmediata mientras se sube a Drive.
+      updateOrder(order.token, (current) => ({ ...current, answers: { ...current.answers, [questionId]: { ...current.answers[questionId], ans: current.answers[questionId]?.ans ?? '', photo: compressed } } }))
+      try {
+        const uploaded = await uploadChecklistPhoto(order.conversationId, dataUrlToBlob(compressed), `${questionId}.jpg`, {
+          boletinId: order.orderId,
+          questionId,
+        })
+        const persistentUrl = driveThumbnailUrl(uploaded.drive_file_id)
+        updateOrder(order.token, (current) => ({ ...current, answers: { ...current.answers, [questionId]: { ...current.answers[questionId], ans: current.answers[questionId]?.ans ?? '', photo: persistentUrl } } }))
+      } catch (uploadError) {
+        // La foto queda visible localmente (dataURL) aunque falle la subida;
+        // se avisa para que el usuario reintente si lo necesita.
+        setPhotoErrorById((current) => ({
+          ...current,
+          [questionId]: uploadError instanceof Error ? `No se pudo guardar la foto en el servidor: ${uploadError.message}` : 'No se pudo guardar la foto en el servidor.',
+        }))
+      }
     } catch (error) {
       setPhotoErrorById((current) => ({ ...current, [questionId]: error instanceof Error ? error.message : 'No se pudo procesar la imagen.' }))
     } finally {
@@ -389,7 +435,17 @@ function ChecklistStep({ order, phase, questions, idx, done, back }: {
 
                   {question.photo && (
                     <div className="check-photo-row">
-                      {answer?.photo && <img className="check-photo-thumb" src={answer.photo} alt="Evidencia" />}
+                      {answer?.photo && (
+                        <img
+                          className="check-photo-thumb"
+                          src={answer.photo}
+                          alt="Evidencia"
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => setPreviewPhoto(answer.photo!)}
+                          onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') setPreviewPhoto(answer.photo!) }}
+                        />
+                      )}
                       <label className="pill-btn">
                         📷 {answer?.photo ? 'Cambiar foto' : 'Subir foto'}
                         <input type="file" accept="image/*" capture="environment" hidden onChange={(event) => onFile(question.id, event.target.files?.[0])} />
@@ -411,6 +467,15 @@ function ChecklistStep({ order, phase, questions, idx, done, back }: {
         <button className="btn ghost" onClick={back}>← Volver</button>
         <button className="btn primary" disabled={!canContinue} onClick={done}>Ver resumen</button>
       </div>
+
+      {previewPhoto && (
+        <div className="photo-modal-overlay" role="dialog" aria-modal="true" onClick={() => setPreviewPhoto(null)}>
+          <div className="photo-modal" onClick={(event) => event.stopPropagation()}>
+            <button className="photo-modal-close" type="button" aria-label="Cerrar" onClick={() => setPreviewPhoto(null)}>✕</button>
+            <img className="photo-modal-img" src={previewPhoto} alt="Evidencia ampliada" />
+          </div>
+        </div>
+      )}
     </Shell>
   )
 }
